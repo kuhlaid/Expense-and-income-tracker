@@ -1,0 +1,8 @@
+{
+  "name": "Expenses and Income tracker",
+  "description": "This application contains database tables for tracking expenses and income on a day-to-day basis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
