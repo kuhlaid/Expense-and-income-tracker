@@ -9,14 +9,6 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// Lookup table 'log_type' with unique auto-increment id and unique name
-export const logType = pgTable('log_type', {
-  id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  name: text('name').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
 // Lookup table 'tag_type' with unique auto-increment id and unique name
 export const tagType = pgTable('tag_type', {
   id: serial('id').primaryKey(),
@@ -39,7 +31,6 @@ export const logs = pgTable('logs', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
   logDate: date('log_date').notNull(),
   logDescription: text('log_description'),
-  logTypeId: integer('log_type_id').references(() => logType.id),
   logAmount: numeric('log_amount', { precision: 12, scale: 2 }),
   logCategory: integer('log_category').references(() => categoryType.id),
   reconciled: boolean('reconciled').default(true),
@@ -60,15 +51,24 @@ export const starterLogs = pgTable('starter_logs', {
   userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
   logDate: date('log_date').default(sql`CURRENT_DATE`).notNull(),
   logDescription: text('log_description'),
-  logTypeId: integer('log_type_id').references(() => logType.id),
   logAmount: numeric('log_amount', { precision: 12, scale: 2 }),
   logCategory: integer('log_category').references(() => categoryType.id),
   reconciled: boolean('reconciled').default(false),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-export type LogType = typeof logType.$inferSelect;
-export type NewLogType = typeof logType.$inferInsert;
+// Table 'database_backups' to store automated monthly and on-demand database snapshots
+export const databaseBackups = pgTable('database_backups', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  backupType: text('backup_type').default('automatic_monthly').notNull(), // 'automatic_monthly' | 'manual'
+  recordCount: integer('record_count').default(0).notNull(),
+  fileSizeKb: numeric('file_size_kb', { precision: 10, scale: 2 }).default('0.00'),
+  snapshotData: text('snapshot_data').notNull(), // JSON serialized snapshot
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 export type TagType = typeof tagType.$inferSelect;
 export type NewTagType = typeof tagType.$inferInsert;
 export type CategoryType = typeof categoryType.$inferSelect;
@@ -81,3 +81,5 @@ export type TagLogAssn = typeof tagLogAssn.$inferSelect;
 export type NewTagLogAssn = typeof tagLogAssn.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type DatabaseBackup = typeof databaseBackups.$inferSelect;
+export type NewDatabaseBackup = typeof databaseBackups.$inferInsert;

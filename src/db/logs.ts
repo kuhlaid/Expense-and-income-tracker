@@ -1,6 +1,6 @@
 import { db } from './index.ts';
-import { logs, logType, categoryType, tagLogAssn, tagType, starterLogs, type Log, type NewLog } from './schema.ts';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { logs, categoryType, tagLogAssn, tagType, starterLogs, type Log, type NewLog } from './schema.ts';
+import { and, desc, eq, inArray, or, isNull } from 'drizzle-orm';
 
 export interface LogTagRef {
   assnId: number;
@@ -9,7 +9,6 @@ export interface LogTagRef {
 }
 
 export interface LogWithRelations extends Log {
-  logTypeName?: string | null;
   categoryName?: string | null;
   tags?: LogTagRef[];
 }
@@ -22,21 +21,18 @@ export async function getLogs(userId?: number): Promise<LogWithRelations[]> {
         userId: logs.userId,
         logDate: logs.logDate,
         logDescription: logs.logDescription,
-        logTypeId: logs.logTypeId,
         logAmount: logs.logAmount,
         logCategory: logs.logCategory,
         reconciled: logs.reconciled,
         createdAt: logs.createdAt,
-        logTypeName: logType.name,
         categoryName: categoryType.name,
       })
       .from(logs)
-      .leftJoin(logType, eq(logs.logTypeId, logType.id))
       .leftJoin(categoryType, eq(logs.logCategory, categoryType.id))
       .orderBy(desc(logs.logDate), desc(logs.id));
 
     const rawLogs = userId !== undefined
-      ? await query.where(eq(logs.userId, userId))
+      ? await query.where(or(isNull(logs.userId), eq(logs.userId, userId)))
       : await query;
 
     if (rawLogs.length === 0) return [];
@@ -79,7 +75,9 @@ export async function getLogs(userId?: number): Promise<LogWithRelations[]> {
 
 export async function getLogById(id: number, userId?: number): Promise<LogWithRelations | undefined> {
   try {
-    const condition = userId !== undefined ? and(eq(logs.id, id), eq(logs.userId, userId)) : eq(logs.id, id);
+    const condition = userId !== undefined
+      ? and(eq(logs.id, id), or(isNull(logs.userId), eq(logs.userId, userId)))
+      : eq(logs.id, id);
     const results = await db.select().from(logs).where(condition);
     if (!results[0]) return undefined;
 
@@ -107,7 +105,6 @@ export async function createLog(data: {
   userId?: number;
   logDate: string;
   logDescription?: string;
-  logTypeId?: number;
   logAmount?: string;
   logCategory?: number;
   reconciled?: boolean;
@@ -120,7 +117,6 @@ export async function createLog(data: {
         userId: data.userId || null,
         logDate: data.logDate,
         logDescription: data.logDescription || null,
-        logTypeId: data.logTypeId || null,
         logAmount: data.logAmount ? String(data.logAmount) : null,
         logCategory: data.logCategory || null,
         reconciled: data.reconciled !== undefined ? data.reconciled : true,
@@ -166,7 +162,6 @@ export async function updateLog(
   data: {
     logDate?: string;
     logDescription?: string;
-    logTypeId?: number;
     logAmount?: string;
     logCategory?: number;
     reconciled?: boolean;
@@ -178,12 +173,14 @@ export async function updateLog(
     const updateValues: Partial<NewLog> = {};
     if (data.logDate !== undefined) updateValues.logDate = data.logDate;
     if (data.logDescription !== undefined) updateValues.logDescription = data.logDescription;
-    if (data.logTypeId !== undefined) updateValues.logTypeId = data.logTypeId;
     if (data.logAmount !== undefined) updateValues.logAmount = data.logAmount ? String(data.logAmount) : null;
     if (data.logCategory !== undefined) updateValues.logCategory = data.logCategory;
     if (data.reconciled !== undefined) updateValues.reconciled = data.reconciled;
+    if (userId !== undefined) updateValues.userId = userId;
 
-    const condition = userId !== undefined ? and(eq(logs.id, id), eq(logs.userId, userId)) : eq(logs.id, id);
+    const condition = userId !== undefined
+      ? and(eq(logs.id, id), or(isNull(logs.userId), eq(logs.userId, userId)))
+      : eq(logs.id, id);
 
     let updatedLog: Log | undefined;
     if (Object.keys(updateValues).length > 0) {
@@ -225,7 +222,9 @@ export async function updateLog(
 
 export async function deleteLog(id: number, userId?: number): Promise<boolean> {
   try {
-    const condition = userId !== undefined ? and(eq(logs.id, id), eq(logs.userId, userId)) : eq(logs.id, id);
+    const condition = userId !== undefined
+      ? and(eq(logs.id, id), or(isNull(logs.userId), eq(logs.userId, userId)))
+      : eq(logs.id, id);
     const result = await db.delete(logs).where(condition).returning();
     return result.length > 0;
   } catch (error) {
@@ -236,7 +235,9 @@ export async function deleteLog(id: number, userId?: number): Promise<boolean> {
 
 export async function deleteAllLogs(userId?: number): Promise<number> {
   try {
-    const condition = userId !== undefined ? eq(logs.userId, userId) : undefined;
+    const condition = userId !== undefined
+      ? or(isNull(logs.userId), eq(logs.userId, userId))
+      : undefined;
     const result = condition ? await db.delete(logs).where(condition).returning() : await db.delete(logs).returning();
     return result.length;
   } catch (error) {
@@ -249,11 +250,11 @@ export async function copyLogsToStarterLogs(logIds: number[], userId: number): P
   try {
     if (!logIds || logIds.length === 0) return [];
     
-    // Select the requested logs that belong to this user
+    // Select the requested logs that belong to this user or are unassigned
     const selectedLogs = await db
       .select()
       .from(logs)
-      .where(and(inArray(logs.id, logIds), eq(logs.userId, userId)));
+      .where(and(inArray(logs.id, logIds), or(isNull(logs.userId), eq(logs.userId, userId))));
 
     if (selectedLogs.length === 0) return [];
 
@@ -264,7 +265,6 @@ export async function copyLogsToStarterLogs(logIds: number[], userId: number): P
         .values({
           userId: userId,
           logDescription: logItem.logDescription,
-          logTypeId: logItem.logTypeId,
           logAmount: logItem.logAmount,
           logCategory: logItem.logCategory,
           reconciled: false, // Default for starter logs
@@ -277,6 +277,83 @@ export async function copyLogsToStarterLogs(logIds: number[], userId: number): P
   } catch (error: any) {
     console.error("Failed in copyLogsToStarterLogs:", error);
     throw new Error(error.message || "Failed to copy logs to starter logs.", { cause: error });
+  }
+}
+
+export async function bulkCreateLogs(
+  items: Array<{
+    logDate: string;
+    logDescription?: string | null;
+    logAmount?: string | null;
+    logCategory?: number | null;
+    reconciled?: boolean | null;
+    tagIds?: number[];
+  }>,
+  userId?: number,
+  replaceAll: boolean = false
+): Promise<{ count: number; items: LogWithRelations[] }> {
+  try {
+    if (replaceAll) {
+      await deleteAllLogs(userId);
+    }
+
+    if (!items || items.length === 0) {
+      return { count: 0, items: [] };
+    }
+
+    const createdLogs: LogWithRelations[] = [];
+
+    // Process in batches of 50 for safety and speed
+    const batchSize = 50;
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize);
+      
+      const insertValues = batch.map((item) => ({
+        userId: userId || null,
+        logDate: item.logDate,
+        logDescription: item.logDescription || null,
+        logAmount: item.logAmount ? String(item.logAmount) : null,
+        logCategory: item.logCategory || null,
+        reconciled: item.reconciled !== undefined && item.reconciled !== null ? Boolean(item.reconciled) : true,
+      }));
+
+      const inserted = await db.insert(logs).values(insertValues).returning();
+
+      // Handle tag attachments if present
+      for (let j = 0; j < inserted.length; j++) {
+        const originalItem = batch[j];
+        const logRow = inserted[j];
+        const attachedTags: LogTagRef[] = [];
+
+        if (originalItem.tagIds && originalItem.tagIds.length > 0) {
+          for (const tid of originalItem.tagIds) {
+            const [assn] = await db
+              .insert(tagLogAssn)
+              .values({ tagId: Number(tid), logId: logRow.id })
+              .returning();
+            
+            const tagInfo = await db.select().from(tagType).where(eq(tagType.id, Number(tid)));
+            if (assn && tagInfo[0]) {
+              attachedTags.push({
+                assnId: assn.id,
+                tagId: tagInfo[0].id,
+                tagName: tagInfo[0].name,
+              });
+            }
+          }
+        }
+
+        createdLogs.push({
+          ...logRow,
+          tags: attachedTags,
+        });
+      }
+    }
+
+    return { count: createdLogs.length, items: createdLogs };
+  } catch (error: any) {
+    console.error("Failed in bulkCreateLogs:", error);
+    throw new Error(error.message || "Failed to bulk import logs.", { cause: error });
   }
 }
 

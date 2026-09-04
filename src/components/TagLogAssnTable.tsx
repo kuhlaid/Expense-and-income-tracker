@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { TagLogAssnItem } from '../types.ts';
-import { Trash2, Copy, CheckCheck, Plus, Calendar, Tag, FileText, ArrowRight, CloudOff } from 'lucide-react';
-import { useOffline } from '../context/OfflineContext.tsx';
+import { Trash2, Copy, CheckCheck, Plus, Calendar, Tag, ArrowRight } from 'lucide-react';
 
 interface TagLogAssnTableProps {
   associations: TagLogAssnItem[];
@@ -18,7 +17,6 @@ export const TagLogAssnTable: React.FC<TagLogAssnTableProps> = ({
   searchTerm,
   onOpenAdd,
 }) => {
-  const { isItemPendingSync } = useOffline();
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -106,15 +104,6 @@ export const TagLogAssnTable: React.FC<TagLogAssnTableProps> = ({
                     <td className="px-5 py-3.5 text-xs font-mono text-gray-900 font-medium">
                       <div className="flex items-center gap-1.5">
                         <span>#{item.id}</span>
-                        {(item.id < 0 || isItemPendingSync('tag_log_assn', item.id)) && (
-                          <span
-                            title="Created/modified offline (pending sync)"
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-amber-50 text-amber-800 border border-amber-200/80"
-                          >
-                            <CloudOff className="w-2.5 h-2.5 text-amber-600" />
-                            Offline
-                          </span>
-                        )}
                         <button
                           id={`copy-assn-id-btn-${item.id}`}
                           type="button"

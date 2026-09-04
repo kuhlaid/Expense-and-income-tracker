@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Tag, FileText, AlertCircle, Link2, CloudOff } from 'lucide-react';
+import { X, Tag, FileText, AlertCircle, Link2 } from 'lucide-react';
 import { TagTypeItem, LogItem } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useOffline } from '../context/OfflineContext.tsx';
 
 interface AddTagLogAssnModalProps {
   isOpen: boolean;
@@ -19,10 +18,9 @@ export const AddTagLogAssnModal: React.FC<AddTagLogAssnModalProps> = ({
   onAdd,
 }) => {
   const { authFetch } = useAuth();
-  const { effectiveOffline, readCachedData, writeCachedData } = useOffline();
   const [tagId, setTagId] = useState<string>('');
   const [logId, setLogId] = useState<string>('');
-  
+
   const [tagTypes, setTagTypes] = useState<TagTypeItem[]>([]);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -30,36 +28,25 @@ export const AddTagLogAssnModal: React.FC<AddTagLogAssnModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      const cachedTags = readCachedData<TagTypeItem>('tag_type');
-      const cachedLogs = readCachedData<LogItem>('logs');
+      authFetch('/api/tag-types')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) {
+            setTagTypes(d);
+          }
+        })
+        .catch(() => {});
 
-      if (cachedTags.length > 0) setTagTypes(cachedTags);
-      if (cachedLogs.length > 0) setLogs(cachedLogs);
-
-      if (!effectiveOffline) {
-        authFetch('/api/tag-types')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setTagTypes(d);
-              writeCachedData('tag_type', d);
-            }
-          })
-          .catch(() => {});
-
-        authFetch('/api/logs')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setLogs(d);
-              writeCachedData('logs', d);
-            }
-          })
-          .catch(() => {});
-      }
+      authFetch('/api/logs')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) {
+            setLogs(d);
+          }
+        })
+        .catch(() => {});
     }
-  }, [isOpen, effectiveOffline]);
-
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -117,13 +104,6 @@ export const AddTagLogAssnModal: React.FC<AddTagLogAssnModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {effectiveOffline && (
-            <div id="add-assn-offline-notice" className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg flex items-center gap-2">
-              <CloudOff className="w-4 h-4 text-amber-600 shrink-0" />
-              <span><strong>Offline Mode:</strong> Association will be saved locally and pushed when connection is restored.</span>
-            </div>
-          )}
-
           {errorMsg && (
             <div id="add-assn-modal-error" className="p-3 bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-lg flex items-start gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />

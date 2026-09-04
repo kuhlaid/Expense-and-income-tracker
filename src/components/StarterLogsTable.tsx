@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { StarterLogItem } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useOffline } from '../context/OfflineContext.tsx';
 import {
   Trash2,
   Copy,
@@ -9,15 +8,13 @@ import {
   Plus,
   Calendar,
   Folder,
-  Filter,
   X,
   Edit2,
   CheckCircle2,
   Clock,
   Sparkles,
   ArrowRightCircle,
-  FileText,
-  CloudOff,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { EditStarterLogModal } from './EditStarterLogModal.tsx';
 
@@ -30,13 +27,13 @@ interface StarterLogsTableProps {
     data: {
       logDate?: string;
       logDescription?: string;
-      logTypeId?: number;
       logAmount?: string;
       logCategory?: number;
       reconciled?: boolean;
     }
   ) => Promise<{ success: boolean; error?: string }>;
   onOpenAdd: () => void;
+  onOpenImportCsv?: () => void;
   onRefresh: () => void;
   onNotice?: (type: 'success' | 'error', message: string) => void;
 }
@@ -47,14 +44,13 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
   onDelete,
   onUpdate,
   onOpenAdd,
+  onOpenImportCsv,
   onRefresh,
   onNotice,
 }) => {
   const { authFetch } = useAuth();
-  const { effectiveOffline, collectOfflineRecord, isItemPendingSync } = useOffline();
   const [searchTerm, setSearchTerm] = useState('');
   const [reconciledFilter, setReconciledFilter] = useState<string>('all');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [editingLog, setEditingLog] = useState<StarterLogItem | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -62,10 +58,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
   const [applyingId, setApplyingId] = useState<number | null>(null);
   const [isClearingAll, setIsClearingAll] = useState(false);
 
-  // Extract unique log types and categories present in starterLogs
-  const uniqueTypes = Array.from(
-    new Set(starterLogs.filter((l) => l.logTypeName).map((l) => l.logTypeName as string))
-  );
   const uniqueCategories = Array.from(
     new Set(starterLogs.filter((l) => l.categoryName).map((l) => l.categoryName as string))
   );
@@ -76,11 +68,10 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
       const q = searchTerm.toLowerCase();
       const matchDesc = item.logDescription?.toLowerCase().includes(q);
       const matchDate = item.logDate?.toLowerCase().includes(q);
-      const matchType = item.logTypeName?.toLowerCase().includes(q);
       const matchCat = item.categoryName?.toLowerCase().includes(q);
       const matchAmount = item.logAmount?.toLowerCase().includes(q);
       const matchId = String(item.id).includes(q);
-      if (!matchDesc && !matchDate && !matchType && !matchCat && !matchAmount && !matchId) {
+      if (!matchDesc && !matchDate && !matchCat && !matchAmount && !matchId) {
         return false;
       }
     }
@@ -90,11 +81,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
       if (item.reconciled !== true) return false;
     } else if (reconciledFilter === 'unreconciled') {
       if (item.reconciled === true) return false;
-    }
-
-    // Type filter
-    if (typeFilter !== 'all' && item.logTypeName !== typeFilter) {
-      return false;
     }
 
     // Category filter
@@ -121,7 +107,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
     await onUpdate(item.id, {
       logDate: item.logDate,
       logDescription: item.logDescription || undefined,
-      logTypeId: item.logTypeId || undefined,
       logAmount: item.logAmount || undefined,
       logCategory: item.logCategory || undefined,
       reconciled: nextVal,
@@ -131,22 +116,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
   const handleApplyToLogs = async (item: StarterLogItem) => {
     setApplyingId(item.id);
     try {
-      if (effectiveOffline) {
-        collectOfflineRecord('CREATE_LOG', 'logs', undefined, {
-          logDate: new Date().toISOString().split('T')[0],
-          logDescription: item.logDescription,
-          logTypeId: item.logTypeId,
-          logAmount: item.logAmount,
-          logCategory: item.logCategory,
-          reconciled: false,
-        });
-        if (onNotice) {
-          onNotice('success', `Copied starter log #${item.id} ("${item.logDescription || 'Entry'}") into active 'logs' (queued offline)!`);
-        }
-        if (onRefresh) onRefresh();
-        return;
-      }
-
       const res = await authFetch(`/api/starter-logs/${item.id}/copy-to-logs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -158,6 +127,7 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
       if (onNotice) {
         onNotice('success', `Copied starter log #${item.id} ("${item.logDescription || 'Entry'}") into active 'logs' with today's date!`);
       }
+      onRefresh();
     } catch (err: any) {
       if (onNotice) {
         onNotice('error', err.message || 'Failed to copy to logs table.');
@@ -171,15 +141,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
     if (!window.confirm('Are you sure you want to delete all starter_logs template records?')) return;
     setIsClearingAll(true);
     try {
-      if (effectiveOffline) {
-        for (const log of starterLogs) {
-          collectOfflineRecord('DELETE_STARTER_LOG', 'starter_logs', log.id);
-        }
-        if (onNotice) onNotice('success', 'All starter logs cleared (queued offline).');
-        onRefresh();
-        return;
-      }
-
       const res = await authFetch('/api/starter-logs', { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to clear starter logs');
@@ -196,9 +157,10 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
     if (!val) return <span className="text-gray-300 font-mono">-</span>;
     const num = parseFloat(val);
     if (isNaN(num)) return <span className="font-mono text-gray-500">{val}</span>;
+    const isPositive = num >= 0;
     return (
-      <span className="font-mono font-medium text-gray-900">
-        ${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      <span className={`font-mono font-medium ${isPositive ? 'text-emerald-700' : 'text-rose-600'}`}>
+        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num)}
       </span>
     );
   };
@@ -240,29 +202,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
             </option>
           </select>
 
-          {uniqueTypes.length > 0 && (
-            <>
-              <div className="h-4 w-px bg-gray-200" />
-              <div className="flex items-center gap-1.5 font-medium text-gray-700">
-                <FileText className="w-3.5 h-3.5 text-blue-600" />
-                <span>Log Type:</span>
-              </div>
-              <select
-                id="starter-logs-type-filter"
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                className="px-2.5 py-1 bg-white border border-gray-200 rounded-md text-xs font-mono text-gray-800 focus:outline-none focus:border-black transition-colors"
-              >
-                <option value="all">All Types</option>
-                {uniqueTypes.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </>
-          )}
-
           {uniqueCategories.length > 0 && (
             <>
               <div className="h-4 w-px bg-gray-200" />
@@ -286,13 +225,12 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
             </>
           )}
 
-          {(reconciledFilter !== 'all' || typeFilter !== 'all' || categoryFilter !== 'all' || searchTerm) && (
+          {(reconciledFilter !== 'all' || categoryFilter !== 'all' || searchTerm) && (
             <button
               id="reset-starter-filters-btn"
               type="button"
               onClick={() => {
                 setReconciledFilter('all');
-                setTypeFilter('all');
                 setCategoryFilter('all');
                 setSearchTerm('');
               }}
@@ -317,6 +255,19 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
             </button>
           )}
 
+          {onOpenImportCsv && (
+            <button
+              id="starter-logs-import-csv-btn"
+              type="button"
+              onClick={onOpenImportCsv}
+              className="px-2.5 py-1.5 text-xs text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md font-medium flex items-center gap-1.5 transition-colors shadow-2xs"
+              title="Import records from CSV file into starter_logs"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Import CSV</span>
+            </button>
+          )}
+
           <button
             id="open-add-starter-log-modal-btn"
             type="button"
@@ -337,7 +288,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
               <th className="px-5 py-3.5 w-16">ID</th>
               <th className="px-5 py-3.5 min-w-[130px]">Log Date</th>
               <th className="px-5 py-3.5 min-w-[200px]">Description</th>
-              <th className="px-5 py-3.5">Log Type</th>
               <th className="px-5 py-3.5">Category</th>
               <th className="px-5 py-3.5">Amount</th>
               <th className="px-5 py-3.5">Reconciled (Default: False)</th>
@@ -347,7 +297,7 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
           <tbody className="divide-y divide-gray-100">
             {isLoading ? (
               <tr>
-                <td colSpan={8} className="py-16 text-center text-gray-400">
+                <td colSpan={7} className="py-16 text-center text-gray-400">
                   <div className="flex flex-col items-center justify-center gap-2.5">
                     <div className="w-5 h-5 border-2 border-gray-200 border-t-black rounded-full animate-spin"></div>
                     <span className="text-xs text-gray-500 font-mono">Querying starter_logs from Cloud SQL...</span>
@@ -356,8 +306,8 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-14 text-center text-gray-400">
-                  {searchTerm || reconciledFilter !== 'all' || typeFilter !== 'all' || categoryFilter !== 'all' ? (
+                <td colSpan={7} className="py-14 text-center text-gray-400">
+                  {searchTerm || reconciledFilter !== 'all' || categoryFilter !== 'all' ? (
                     <div>
                       <p className="text-sm font-medium text-gray-700">No starter_logs matching filters</p>
                       <p className="text-xs text-gray-400 mt-1">Try resetting your search query or dropdown filters</p>
@@ -395,15 +345,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
                   <td className="px-5 py-3.5 font-mono text-xs text-gray-500">
                     <div className="flex items-center gap-1.5">
                       <span>#{item.id}</span>
-                      {(item.id < 0 || item._isOffline || isItemPendingSync('starter_logs', item.id)) && (
-                        <span
-                          title="Collected / modified offline (pending sync)"
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-amber-50 text-amber-800 border border-amber-200/80"
-                        >
-                          <CloudOff className="w-2.5 h-2.5 text-amber-600" />
-                          Offline
-                        </span>
-                      )}
                     </div>
                   </td>
 
@@ -421,19 +362,6 @@ export const StarterLogsTable: React.FC<StarterLogsTableProps> = ({
                   {/* Description */}
                   <td className="px-5 py-3.5 text-xs text-gray-800">
                     <div className="font-medium text-gray-900">{item.logDescription || <span className="text-gray-300 italic">No description</span>}</div>
-                  </td>
-
-                  {/* Log Type */}
-                  <td className="px-5 py-3.5 text-xs text-gray-600 whitespace-nowrap">
-                    {item.logTypeName ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                        {item.logTypeName}
-                      </span>
-                    ) : item.logTypeId ? (
-                      <span className="font-mono text-gray-400 text-xs">#{item.logTypeId}</span>
-                    ) : (
-                      <span className="text-gray-300 font-mono text-xs">-</span>
-                    )}
                   </td>
 
                   {/* Category */}

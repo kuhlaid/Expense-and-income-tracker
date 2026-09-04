@@ -1,9 +1,8 @@
 import { db } from './index.ts';
-import { starterLogs, logType, categoryType, logs, NewStarterLog, StarterLog } from './schema.ts';
-import { and, eq, desc } from 'drizzle-orm';
+import { starterLogs, categoryType, logs, NewStarterLog, StarterLog } from './schema.ts';
+import { and, eq, desc, or, isNull } from 'drizzle-orm';
 
 export interface StarterLogWithRelations extends StarterLog {
-  logTypeName?: string | null;
   categoryName?: string | null;
 }
 
@@ -15,21 +14,18 @@ export async function getStarterLogs(userId?: number): Promise<StarterLogWithRel
         userId: starterLogs.userId,
         logDate: starterLogs.logDate,
         logDescription: starterLogs.logDescription,
-        logTypeId: starterLogs.logTypeId,
         logAmount: starterLogs.logAmount,
         logCategory: starterLogs.logCategory,
         reconciled: starterLogs.reconciled,
         createdAt: starterLogs.createdAt,
-        logTypeName: logType.name,
         categoryName: categoryType.name,
       })
       .from(starterLogs)
-      .leftJoin(logType, eq(starterLogs.logTypeId, logType.id))
       .leftJoin(categoryType, eq(starterLogs.logCategory, categoryType.id))
       .orderBy(desc(starterLogs.logDate), desc(starterLogs.id));
 
     const rawStarterLogs = userId !== undefined
-      ? await query.where(eq(starterLogs.userId, userId))
+      ? await query.where(or(isNull(starterLogs.userId), eq(starterLogs.userId, userId)))
       : await query;
 
     return rawStarterLogs;
@@ -41,23 +37,22 @@ export async function getStarterLogs(userId?: number): Promise<StarterLogWithRel
 
 export async function getStarterLogById(id: number, userId?: number): Promise<StarterLogWithRelations | undefined> {
   try {
-    const condition = userId !== undefined ? and(eq(starterLogs.id, id), eq(starterLogs.userId, userId)) : eq(starterLogs.id, id);
+    const condition = userId !== undefined
+      ? and(eq(starterLogs.id, id), or(isNull(starterLogs.userId), eq(starterLogs.userId, userId)))
+      : eq(starterLogs.id, id);
     const results = await db
       .select({
         id: starterLogs.id,
         userId: starterLogs.userId,
         logDate: starterLogs.logDate,
         logDescription: starterLogs.logDescription,
-        logTypeId: starterLogs.logTypeId,
         logAmount: starterLogs.logAmount,
         logCategory: starterLogs.logCategory,
         reconciled: starterLogs.reconciled,
         createdAt: starterLogs.createdAt,
-        logTypeName: logType.name,
         categoryName: categoryType.name,
       })
       .from(starterLogs)
-      .leftJoin(logType, eq(starterLogs.logTypeId, logType.id))
       .leftJoin(categoryType, eq(starterLogs.logCategory, categoryType.id))
       .where(condition);
 
@@ -72,7 +67,6 @@ export async function createStarterLog(data: {
   userId?: number;
   logDate?: string;
   logDescription?: string;
-  logTypeId?: number;
   logAmount?: string;
   logCategory?: number;
   reconciled?: boolean;
@@ -81,7 +75,6 @@ export async function createStarterLog(data: {
     const insertData: any = {
       userId: data.userId || null,
       logDescription: data.logDescription || null,
-      logTypeId: data.logTypeId || null,
       logAmount: data.logAmount ? String(data.logAmount) : null,
       logCategory: data.logCategory || null,
       reconciled: data.reconciled !== undefined ? data.reconciled : false,
@@ -105,7 +98,6 @@ export async function updateStarterLog(
   data: {
     logDate?: string;
     logDescription?: string;
-    logTypeId?: number;
     logAmount?: string;
     logCategory?: number;
     reconciled?: boolean;
@@ -116,12 +108,14 @@ export async function updateStarterLog(
     const updateValues: Partial<NewStarterLog> = {};
     if (data.logDate !== undefined) updateValues.logDate = data.logDate;
     if (data.logDescription !== undefined) updateValues.logDescription = data.logDescription;
-    if (data.logTypeId !== undefined) updateValues.logTypeId = data.logTypeId;
     if (data.logAmount !== undefined) updateValues.logAmount = data.logAmount ? String(data.logAmount) : null;
     if (data.logCategory !== undefined) updateValues.logCategory = data.logCategory;
     if (data.reconciled !== undefined) updateValues.reconciled = data.reconciled;
+    if (userId !== undefined) updateValues.userId = userId;
 
-    const condition = userId !== undefined ? and(eq(starterLogs.id, id), eq(starterLogs.userId, userId)) : eq(starterLogs.id, id);
+    const condition = userId !== undefined
+      ? and(eq(starterLogs.id, id), or(isNull(starterLogs.userId), eq(starterLogs.userId, userId)))
+      : eq(starterLogs.id, id);
 
     if (Object.keys(updateValues).length > 0) {
       await db.update(starterLogs).set(updateValues).where(condition);
@@ -136,7 +130,9 @@ export async function updateStarterLog(
 
 export async function deleteStarterLog(id: number, userId?: number): Promise<boolean> {
   try {
-    const condition = userId !== undefined ? and(eq(starterLogs.id, id), eq(starterLogs.userId, userId)) : eq(starterLogs.id, id);
+    const condition = userId !== undefined
+      ? and(eq(starterLogs.id, id), or(isNull(starterLogs.userId), eq(starterLogs.userId, userId)))
+      : eq(starterLogs.id, id);
     const result = await db.delete(starterLogs).where(condition).returning();
     return result.length > 0;
   } catch (error) {
@@ -147,7 +143,9 @@ export async function deleteStarterLog(id: number, userId?: number): Promise<boo
 
 export async function deleteAllStarterLogs(userId?: number): Promise<number> {
   try {
-    const condition = userId !== undefined ? eq(starterLogs.userId, userId) : undefined;
+    const condition = userId !== undefined
+      ? or(isNull(starterLogs.userId), eq(starterLogs.userId, userId))
+      : undefined;
     const result = condition ? await db.delete(starterLogs).where(condition).returning() : await db.delete(starterLogs).returning();
     return result.length;
   } catch (error) {
@@ -168,7 +166,6 @@ export async function copyStarterLogToLogs(id: number, userId?: number, customDa
         userId: userId || null,
         logDate: todayStr,
         logDescription: item.logDescription,
-        logTypeId: item.logTypeId,
         logAmount: item.logAmount,
         logCategory: item.logCategory,
         reconciled: item.reconciled ?? false,
@@ -181,5 +178,49 @@ export async function copyStarterLogToLogs(id: number, userId?: number, customDa
     throw new Error(error.message || 'Failed to copy starter log to logs table.', { cause: error });
   }
 }
+
+export async function bulkCreateStarterLogs(
+  items: Array<{
+    logDescription?: string | null;
+    logAmount?: string | null;
+    logCategory?: number | null;
+    reconciled?: boolean | null;
+  }>,
+  userId?: number,
+  replaceAll: boolean = false
+): Promise<{ count: number; items: StarterLogWithRelations[] }> {
+  try {
+    if (replaceAll) {
+      await deleteAllStarterLogs(userId);
+    }
+
+    if (!items || items.length === 0) {
+      return { count: 0, items: [] };
+    }
+
+    const createdList: StarterLogWithRelations[] = [];
+    const batchSize = 50;
+
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize);
+      const insertValues = batch.map((item) => ({
+        userId: userId || null,
+        logDescription: item.logDescription || null,
+        logAmount: item.logAmount ? String(item.logAmount) : null,
+        logCategory: item.logCategory || null,
+        reconciled: item.reconciled !== undefined && item.reconciled !== null ? Boolean(item.reconciled) : false,
+      }));
+
+      const inserted = await db.insert(starterLogs).values(insertValues).returning();
+      createdList.push(...inserted);
+    }
+
+    return { count: createdList.length, items: createdList };
+  } catch (error: any) {
+    console.error('Failed in bulkCreateStarterLogs:', error);
+    throw new Error(error.message || 'Failed to bulk import starter logs.', { cause: error });
+  }
+}
+
 
 

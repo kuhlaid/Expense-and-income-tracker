@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, FileText, Tag, Folder, DollarSign, AlertCircle, Check, Plus, CloudOff } from 'lucide-react';
-import { LogTypeItem, CategoryTypeItem, TagTypeItem } from '../types.ts';
+import { X, Calendar, FileText, Tag, Folder, DollarSign, AlertCircle, Check } from 'lucide-react';
+import { CategoryTypeItem, TagTypeItem } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useOffline } from '../context/OfflineContext.tsx';
 
 interface AddLogModalProps {
   isOpen: boolean;
@@ -10,7 +9,6 @@ interface AddLogModalProps {
   onAdd: (data: {
     logDate: string;
     logDescription?: string;
-    logTypeId?: number;
     logAmount?: string;
     logCategory?: number;
     reconciled?: boolean;
@@ -24,17 +22,14 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
   onAdd,
 }) => {
   const { authFetch } = useAuth();
-  const { effectiveOffline, readCachedData, writeCachedData } = useOffline();
   const today = new Date().toISOString().split('T')[0];
   const [logDate, setLogDate] = useState(today);
   const [logDescription, setLogDescription] = useState('');
-  const [logTypeId, setLogTypeId] = useState<string>('');
   const [logAmount, setLogAmount] = useState<string>('');
   const [logCategory, setLogCategory] = useState<string>('');
   const [reconciled, setReconciled] = useState<boolean>(true);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
-  
-  const [logTypes, setLogTypes] = useState<LogTypeItem[]>([]);
+
   const [categoryTypes, setCategoryTypes] = useState<CategoryTypeItem[]>([]);
   const [tagTypes, setTagTypes] = useState<TagTypeItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -42,56 +37,27 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      // First populate immediately from offline cache
-      const cachedLogTypes = readCachedData<LogTypeItem>('log_type');
-      const cachedCategories = readCachedData<CategoryTypeItem>('category_type');
-      const cachedTags = readCachedData<TagTypeItem>('tag_type');
+      authFetch('/api/category-types')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) setCategoryTypes(d);
+        })
+        .catch(() => {});
 
-      if (cachedLogTypes.length > 0) setLogTypes(cachedLogTypes);
-      if (cachedCategories.length > 0) setCategoryTypes(cachedCategories);
-      if (cachedTags.length > 0) setTagTypes(cachedTags);
-
-      // If online, refresh lookup tables
-      if (!effectiveOffline) {
-        authFetch('/api/log-types')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setLogTypes(d);
-              writeCachedData('log_type', d);
-            }
-          })
-          .catch(() => {});
-
-        authFetch('/api/category-types')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setCategoryTypes(d);
-              writeCachedData('category_type', d);
-            }
-          })
-          .catch(() => {});
-
-        authFetch('/api/tag-types')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setTagTypes(d);
-              writeCachedData('tag_type', d);
-            }
-          })
-          .catch(() => {});
-      }
+      authFetch('/api/tag-types')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) setTagTypes(d);
+        })
+        .catch(() => {});
     }
-  }, [isOpen, effectiveOffline]);
-
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const toggleTag = (id: number) => {
-    setSelectedTagIds(prev => 
-      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+    setSelectedTagIds((prev) =>
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
     );
   };
 
@@ -108,7 +74,6 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
     const result = await onAdd({
       logDate,
       logDescription: logDescription.trim() || undefined,
-      logTypeId: logTypeId ? Number(logTypeId) : undefined,
       logAmount: logAmount.trim() || undefined,
       logCategory: logCategory ? Number(logCategory) : undefined,
       reconciled,
@@ -120,7 +85,6 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
     if (result.success) {
       setLogDescription('');
       setLogAmount('');
-      setLogTypeId('');
       setLogCategory('');
       setReconciled(true);
       setSelectedTagIds([]);
@@ -155,13 +119,6 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
-          {effectiveOffline && (
-            <div id="add-log-offline-notice" className="p-2.5 bg-amber-50/80 border border-amber-200 text-amber-900 text-xs rounded-lg flex items-center gap-2">
-              <CloudOff className="w-4 h-4 text-amber-600 shrink-0" />
-              <span><strong>Offline Collection Mode:</strong> This log will be recorded locally and synced automatically when you reconnect.</span>
-            </div>
-          )}
-
           {errorMsg && (
             <div id="add-log-modal-error" className="p-3 bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-lg flex items-start gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -195,7 +152,7 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
                 id="log-amount-input"
                 type="number"
                 step="0.01"
-                placeholder="0.00"
+                placeholder="0.00 (positive: income, negative: expense)"
                 value={logAmount}
                 onChange={(e) => setLogAmount(e.target.value)}
                 className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-black transition-colors font-mono"
@@ -219,47 +176,25 @@ export const AddLogModal: React.FC<AddLogModalProps> = ({
             />
           </div>
 
-          {/* Log Type (FK) & Category (FK) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Tag className="w-3.5 h-3.5 text-gray-400" />
-                <span>Log Type (FK)</span>
-              </label>
-              <select
-                id="log-type-select"
-                value={logTypeId}
-                onChange={(e) => setLogTypeId(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 focus:outline-none focus:border-black transition-colors font-mono"
-              >
-                <option value="">Select log_type...</option>
-                {logTypes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    #{t.id} - {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Folder className="w-3.5 h-3.5 text-gray-400" />
-                <span>Category (FK)</span>
-              </label>
-              <select
-                id="log-category-select"
-                value={logCategory}
-                onChange={(e) => setLogCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 focus:outline-none focus:border-black transition-colors font-mono"
-              >
-                <option value="">Select category_type...</option>
-                {categoryTypes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    #{c.id} - {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Category (FK) */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <Folder className="w-3.5 h-3.5 text-gray-400" />
+              <span>Category (FK)</span>
+            </label>
+            <select
+              id="log-category-select"
+              value={logCategory}
+              onChange={(e) => setLogCategory(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 focus:outline-none focus:border-black transition-colors font-mono"
+            >
+              <option value="">Select category_type...</option>
+              {categoryTypes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  #{c.id} - {c.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Reconciled (boolean, default true) */}

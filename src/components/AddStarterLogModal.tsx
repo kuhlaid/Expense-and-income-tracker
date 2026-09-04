@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, FileText, Folder, DollarSign, AlertCircle, Sparkles, CloudOff } from 'lucide-react';
-import { LogTypeItem, CategoryTypeItem } from '../types.ts';
+import { X, Calendar, FileText, Folder, DollarSign, AlertCircle, Sparkles } from 'lucide-react';
+import { CategoryTypeItem } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useOffline } from '../context/OfflineContext.tsx';
 
 interface AddStarterLogModalProps {
   isOpen: boolean;
@@ -10,7 +9,6 @@ interface AddStarterLogModalProps {
   onAdd: (data: {
     logDate?: string;
     logDescription?: string;
-    logTypeId?: number;
     logAmount?: string;
     logCategory?: number;
     reconciled?: boolean;
@@ -23,16 +21,13 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
   onAdd,
 }) => {
   const { authFetch } = useAuth();
-  const { effectiveOffline, readCachedData, writeCachedData } = useOffline();
   const today = new Date().toISOString().split('T')[0];
   const [logDate, setLogDate] = useState(today);
   const [logDescription, setLogDescription] = useState('');
-  const [logTypeId, setLogTypeId] = useState<string>('');
   const [logAmount, setLogAmount] = useState<string>('');
   const [logCategory, setLogCategory] = useState<string>('');
   const [reconciled, setReconciled] = useState<boolean>(false); // Requirement: default False
-  
-  const [logTypes, setLogTypes] = useState<LogTypeItem[]>([]);
+
   const [categoryTypes, setCategoryTypes] = useState<CategoryTypeItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -43,36 +38,16 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
       setReconciled(false);
       setErrorMsg(null);
 
-      const cachedLogTypes = readCachedData<LogTypeItem>('log_type');
-      const cachedCategories = readCachedData<CategoryTypeItem>('category_type');
-
-      if (cachedLogTypes.length > 0) setLogTypes(cachedLogTypes);
-      if (cachedCategories.length > 0) setCategoryTypes(cachedCategories);
-
-      if (!effectiveOffline) {
-        authFetch('/api/log-types')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setLogTypes(d);
-              writeCachedData('log_type', d);
-            }
-          })
-          .catch(() => {});
-
-        authFetch('/api/category-types')
-          .then(r => r.json())
-          .then(d => {
-            if (Array.isArray(d)) {
-              setCategoryTypes(d);
-              writeCachedData('category_type', d);
-            }
-          })
-          .catch(() => {});
-      }
+      authFetch('/api/category-types')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) {
+            setCategoryTypes(d);
+          }
+        })
+        .catch(() => {});
     }
-  }, [isOpen, effectiveOffline]);
-
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -85,7 +60,6 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
     const result = await onAdd({
       logDate: logDate.trim() || undefined,
       logDescription: logDescription.trim() || undefined,
-      logTypeId: logTypeId ? Number(logTypeId) : undefined,
       logAmount: logAmount.trim() || undefined,
       logCategory: logCategory ? Number(logCategory) : undefined,
       reconciled,
@@ -96,7 +70,6 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
     if (result.success) {
       setLogDescription('');
       setLogAmount('');
-      setLogTypeId('');
       setLogCategory('');
       setReconciled(false);
       onClose();
@@ -145,13 +118,6 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
         )}
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          {effectiveOffline && (
-            <div id="add-starter-log-offline-notice" className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg flex items-center gap-2">
-              <CloudOff className="w-4 h-4 text-amber-600 shrink-0" />
-              <span><strong>Offline Mode:</strong> Starter template will be stored locally and synced when you reconnect.</span>
-            </div>
-          )}
-
           {/* log_date */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -192,48 +158,25 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
             </div>
           </div>
 
-          {/* Grid for Log Type & Category Type */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* log_type_id */}
-            <div>
-              <label htmlFor="starter-log-type-select" className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">
-                Log Type (`log_type_id`)
-              </label>
-              <select
-                id="starter-log-type-select"
-                value={logTypeId}
-                onChange={(e) => setLogTypeId(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-black transition-colors"
-              >
-                <option value="">-- None (Null) --</option>
-                {logTypes.map((type) => (
-                  <option key={type.id} value={type.id}>
-                    #{type.id} - {type.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* log_category */}
-            <div>
-              <label htmlFor="starter-log-category-select" className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Folder className="w-3 h-3 text-gray-400" />
-                <span>Category (`log_category`)</span>
-              </label>
-              <select
-                id="starter-log-category-select"
-                value={logCategory}
-                onChange={(e) => setLogCategory(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-black transition-colors"
-              >
-                <option value="">-- None (Null) --</option>
-                {categoryTypes.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    #{cat.id} - {cat.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Category Type */}
+          <div>
+            <label htmlFor="starter-log-category-select" className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <Folder className="w-3 h-3 text-gray-400" />
+              <span>Category (`log_category`)</span>
+            </label>
+            <select
+              id="starter-log-category-select"
+              value={logCategory}
+              onChange={(e) => setLogCategory(e.target.value)}
+              className="w-full px-3 py-2 text-xs bg-white border border-gray-200 rounded-lg text-gray-900 focus:outline-none focus:border-black transition-colors"
+            >
+              <option value="">-- None (Null) --</option>
+              {categoryTypes.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  #{cat.id} - {cat.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* log_amount */}
@@ -247,10 +190,9 @@ export const AddStarterLogModal: React.FC<AddStarterLogModalProps> = ({
                 id="starter-log-amount-input"
                 type="number"
                 step="0.01"
-                min="0"
                 value={logAmount}
                 onChange={(e) => setLogAmount(e.target.value)}
-                placeholder="0.00"
+                placeholder="0.00 (positive: income, negative: expense)"
                 className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-gray-200 rounded-lg text-gray-900 font-mono placeholder:text-gray-400 focus:outline-none focus:border-black transition-colors"
               />
             </div>

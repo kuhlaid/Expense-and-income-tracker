@@ -1,10 +1,9 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { getLogTypes, createLogType, updateLogType, deleteLogType, deleteAllLogTypes } from './src/db/log-types.ts';
 import { getTagTypes, createTagType, updateTagType, deleteTagType, deleteAllTagTypes } from './src/db/tag-types.ts';
 import { getCategoryTypes, createCategoryType, updateCategoryType, deleteCategoryType, deleteAllCategoryTypes } from './src/db/category-types.ts';
-import { getLogs, createLog, updateLog, deleteLog, deleteAllLogs, copyLogsToStarterLogs } from './src/db/logs.ts';
+import { getLogs, createLog, updateLog, deleteLog, deleteAllLogs, copyLogsToStarterLogs, bulkCreateLogs } from './src/db/logs.ts';
 import {
   getStarterLogs,
   getStarterLogById,
@@ -13,8 +12,19 @@ import {
   deleteStarterLog,
   deleteAllStarterLogs,
   copyStarterLogToLogs,
+  bulkCreateStarterLogs,
 } from './src/db/starter-logs.ts';
 import { getTagLogAssns, getTagsForLog, createTagLogAssn, deleteTagLogAssn, deleteAllTagLogAssns } from './src/db/tag-log-assn.ts';
+import {
+  getDatabaseBackups,
+  getBackupById,
+  createDatabaseBackup,
+  checkAndCreateMonthlyBackup,
+  deleteDatabaseBackup,
+  restoreDatabaseFromSnapshot,
+  compileLiveSnapshot,
+  generateSqlDump,
+} from './src/db/backups.ts';
 import { db } from './src/db/index.ts';
 import { sql } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
@@ -39,7 +49,7 @@ async function startServer() {
   app.get('/api/table-schema', requireAuth, async (req: AuthRequest, res) => {
     try {
       const requestedTable = (req.query.table as string) || 'logs';
-      const validTables = ['logs', 'starter_logs', 'tag_log_assn', 'category_type', 'tag_type', 'log_type', 'users'];
+      const validTables = ['logs', 'starter_logs', 'tag_log_assn', 'category_type', 'tag_type', 'users'];
       const targetTable = validTables.includes(requestedTable) ? requestedTable : 'logs';
 
       const result = await db.execute(
@@ -164,7 +174,7 @@ async function startServer() {
   app.post('/api/logs', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.dbUser?.id;
-      const { logDate, logDescription, logTypeId, logAmount, logCategory, reconciled, tagIds } = req.body;
+      const { logDate, logDescription, logAmount, logCategory, reconciled, tagIds } = req.body;
       if (!logDate) {
         return res.status(400).json({ error: 'logDate is required (YYYY-MM-DD).' });
       }
@@ -172,7 +182,6 @@ async function startServer() {
         userId,
         logDate,
         logDescription,
-        logTypeId: logTypeId ? Number(logTypeId) : undefined,
         logAmount: logAmount !== undefined && logAmount !== '' ? String(logAmount) : undefined,
         logCategory: logCategory ? Number(logCategory) : undefined,
         reconciled: reconciled !== undefined ? Boolean(reconciled) : true,
@@ -209,13 +218,12 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid ID.' });
       }
       const userId = req.dbUser?.id;
-      const { logDate, logDescription, logTypeId, logAmount, logCategory, reconciled, tagIds } = req.body;
+      const { logDate, logDescription, logAmount, logCategory, reconciled, tagIds } = req.body;
       const updated = await updateLog(
         id,
         {
           logDate,
           logDescription,
-          logTypeId: logTypeId !== undefined ? (logTypeId ? Number(logTypeId) : undefined) : undefined,
           logAmount: logAmount !== undefined ? (logAmount !== '' ? String(logAmount) : undefined) : undefined,
           logCategory: logCategory !== undefined ? (logCategory ? Number(logCategory) : undefined) : undefined,
           reconciled: reconciled !== undefined ? Boolean(reconciled) : undefined,
@@ -224,12 +232,43 @@ async function startServer() {
         userId
       );
       if (!updated) {
+        console.warn(`[PUT /api/logs/:id] Log entry ${id} not found for userId: ${userId}`);
         return res.status(404).json({ error: 'Log entry not found.' });
       }
       res.json(updated);
     } catch (error: any) {
       console.error('Failed to update log:', error);
       res.status(500).json({ error: error.message || 'Failed to update log' });
+    }
+  });
+
+  // Bulk import logs via CSV / JSON payload
+  app.post('/api/logs/import-csv', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const { items, replaceAll } = req.body;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'Array of log items is required for import.' });
+      }
+
+      const formatted = items.map((r: any) => ({
+        logDate: r.logDate || r.log_date || new Date().toISOString().split('T')[0],
+        logDescription: r.logDescription || r.log_description || null,
+        logAmount: r.logAmount !== undefined && r.logAmount !== null && r.logAmount !== '' ? String(r.logAmount || r.log_amount).replace(/[$,]/g, '').trim() : null,
+        logCategory: r.logCategory !== undefined && r.logCategory !== null && r.logCategory !== '' ? Number(r.logCategory || r.log_category) : null,
+        reconciled: r.reconciled !== undefined ? Boolean(r.reconciled) : true,
+        tagIds: Array.isArray(r.tagIds) ? r.tagIds.map(Number) : undefined,
+      }));
+
+      const result = await bulkCreateLogs(formatted, userId, Boolean(replaceAll));
+      res.status(201).json({
+        success: true,
+        count: result.count,
+        message: `Successfully imported ${result.count} records into logs.`,
+      });
+    } catch (error: any) {
+      console.error('Failed to import logs:', error);
+      res.status(500).json({ error: error.message || 'Failed to import logs.' });
     }
   });
 
@@ -255,6 +294,7 @@ async function startServer() {
       const userId = req.dbUser?.id;
       const deleted = await deleteLog(id, userId);
       if (!deleted) {
+        console.warn(`[DELETE /api/logs/:id] Log entry ${id} not found for userId: ${userId}`);
         return res.status(404).json({ error: 'Log entry not found.' });
       }
       res.json({ success: true, message: `Log entry with id ${id} deleted.` });
@@ -281,12 +321,11 @@ async function startServer() {
   app.post('/api/starter-logs', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.dbUser?.id;
-      const { logDate, logDescription, logTypeId, logAmount, logCategory, reconciled } = req.body;
+      const { logDate, logDescription, logAmount, logCategory, reconciled } = req.body;
       const created = await createStarterLog({
         userId,
         logDate: logDate ? String(logDate).trim() : undefined,
         logDescription: logDescription ? String(logDescription).trim() : undefined,
-        logTypeId: logTypeId ? Number(logTypeId) : undefined,
         logAmount: logAmount !== undefined && logAmount !== '' ? String(logAmount) : undefined,
         logCategory: logCategory ? Number(logCategory) : undefined,
         reconciled: reconciled !== undefined ? Boolean(reconciled) : false,
@@ -306,13 +345,12 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid ID.' });
       }
       const userId = req.dbUser?.id;
-      const { logDate, logDescription, logTypeId, logAmount, logCategory, reconciled } = req.body;
+      const { logDate, logDescription, logAmount, logCategory, reconciled } = req.body;
       const updated = await updateStarterLog(
         id,
         {
           logDate: logDate !== undefined ? (logDate ? String(logDate).trim() : undefined) : undefined,
           logDescription: logDescription !== undefined ? (logDescription ? String(logDescription).trim() : undefined) : undefined,
-          logTypeId: logTypeId !== undefined ? (logTypeId ? Number(logTypeId) : undefined) : undefined,
           logAmount: logAmount !== undefined ? (logAmount !== '' ? String(logAmount) : undefined) : undefined,
           logCategory: logCategory !== undefined ? (logCategory ? Number(logCategory) : undefined) : undefined,
           reconciled: reconciled !== undefined ? Boolean(reconciled) : undefined,
@@ -343,6 +381,34 @@ async function startServer() {
     } catch (error: any) {
       console.error('Failed to copy starter log:', error);
       res.status(500).json({ error: error.message || 'Failed to copy starter log' });
+    }
+  });
+
+  // Bulk import starter logs via CSV / JSON payload
+  app.post('/api/starter-logs/import-csv', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const { items, replaceAll } = req.body;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'Array of starter log items is required for import.' });
+      }
+
+      const formatted = items.map((r: any) => ({
+        logDescription: r.logDescription || r.log_description || null,
+        logAmount: r.logAmount !== undefined && r.logAmount !== null && r.logAmount !== '' ? String(r.logAmount || r.log_amount).replace(/[$,]/g, '').trim() : null,
+        logCategory: r.logCategory !== undefined && r.logCategory !== null && r.logCategory !== '' ? Number(r.logCategory || r.log_category) : null,
+        reconciled: r.reconciled !== undefined ? Boolean(r.reconciled) : false,
+      }));
+
+      const result = await bulkCreateStarterLogs(formatted, userId, Boolean(replaceAll));
+      res.status(201).json({
+        success: true,
+        count: result.count,
+        message: `Successfully imported ${result.count} records into starter_logs.`,
+      });
+    } catch (error: any) {
+      console.error('Failed to import starter logs:', error);
+      res.status(500).json({ error: error.message || 'Failed to import starter logs.' });
     }
   });
 
@@ -597,113 +663,209 @@ async function startServer() {
     }
   });
 
-  // --- LOG TYPES ENDPOINTS ---
-  // List all log types
-  app.get('/api/log-types', requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.dbUser?.id;
-      const types = await getLogTypes(userId);
-      res.json(types);
-    } catch (error: any) {
-      console.error('Failed to fetch log types:', error);
-      res.status(500).json({ error: error.message || 'Failed to fetch log types' });
-    }
-  });
+  // --- DATABASE BACKUP ENDPOINTS ---
 
-  // Create a new log type
-  app.post('/api/log-types', requireAuth, async (req: AuthRequest, res) => {
+  // Get list of database backups (and check/trigger monthly snapshot if needed)
+  app.get('/api/backups', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.dbUser?.id;
-      const { name } = req.body;
-      if (!name || typeof name !== 'string' || !name.trim()) {
-        return res.status(400).json({ error: 'Name is required and cannot be blank.' });
+      // Proactively check if this month's automatic backup has run
+      try {
+        await checkAndCreateMonthlyBackup(userId);
+      } catch (autoErr) {
+        console.warn('Auto monthly backup check encountered non-fatal error:', autoErr);
       }
-      const created = await createLogType({ name: name.trim(), userId });
-      res.status(201).json(created);
+
+      const backups = await getDatabaseBackups(userId);
+      res.json(backups);
     } catch (error: any) {
-      console.error('Failed to create log type:', error);
-      const isDuplicate = error.message?.includes('already exists');
-      res.status(isDuplicate ? 409 : 500).json({ error: error.message || 'Failed to create log type' });
+      console.error('Failed to get backups:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch backups' });
     }
   });
 
-  // Update a log type
-  app.put('/api/log-types/:id', requireAuth, async (req: AuthRequest, res) => {
+  // Check and trigger monthly backup
+  app.post('/api/backups/check-monthly', requireAuth, async (req: AuthRequest, res) => {
     try {
+      const userId = req.dbUser?.id;
+      const result = await checkAndCreateMonthlyBackup(userId);
+      const all = await getDatabaseBackups(userId);
+      res.json({ ...result, backups: all });
+    } catch (error: any) {
+      console.error('Failed to run monthly backup check:', error);
+      res.status(500).json({ error: error.message || 'Failed to trigger monthly backup' });
+    }
+  });
+
+  // Create on-demand manual or scheduled backup
+  app.post('/api/backups', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const { name, backupType } = req.body || {};
+      const backup = await createDatabaseBackup(userId, name, backupType || 'manual');
+      res.status(201).json(backup);
+    } catch (error: any) {
+      console.error('Failed to create backup:', error);
+      res.status(500).json({ error: error.message || 'Failed to create database backup' });
+    }
+  });
+
+  // Get single backup with data
+  app.get('/api/backups/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid ID.' });
-      }
-      const { name } = req.body;
-      if (!name || typeof name !== 'string' || !name.trim()) {
-        return res.status(400).json({ error: 'Name is required and cannot be blank.' });
-      }
-      const updated = await updateLogType(id, { name: name.trim() });
-      if (!updated) {
-        return res.status(404).json({ error: 'Log type not found.' });
-      }
-      res.json(updated);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid backup ID' });
+
+      const backup = await getBackupById(id, userId);
+      if (!backup) return res.status(404).json({ error: 'Backup not found' });
+      res.json(backup);
     } catch (error: any) {
-      console.error('Failed to update log type:', error);
-      const isDuplicate = error.message?.includes('already exists');
-      res.status(isDuplicate ? 409 : 500).json({ error: error.message || 'Failed to update log type' });
+      console.error('Failed to get backup details:', error);
+      res.status(500).json({ error: error.message || 'Failed to get backup' });
     }
   });
 
-  // Delete all log types
-  app.delete('/api/log-types', requireAuth, async (req: AuthRequest, res) => {
+  // Download backup as JSON file
+  app.get('/api/backups/:id/download-json', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.dbUser?.id;
-      const count = await deleteAllLogTypes(userId);
-      res.json({ success: true, message: `Removed all (${count}) records from log_type.` });
-    } catch (error: any) {
-      console.error('Failed to clear log types:', error);
-      res.status(500).json({ error: error.message || 'Failed to clear log types' });
-    }
-  });
-
-  // Delete a log type
-  app.delete('/api/log-types/:id', requireAuth, async (req: AuthRequest, res) => {
-    try {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid ID.' });
-      }
-      const deleted = await deleteLogType(id);
-      if (!deleted) {
-        return res.status(404).json({ error: 'Log type not found.' });
-      }
-      res.json({ success: true, message: `Log type with id ${id} deleted.` });
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid backup ID' });
+
+      const backup = await getBackupById(id, userId);
+      if (!backup) return res.status(404).json({ error: 'Backup not found' });
+
+      const sanitizedName = backup.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      const filename = `db_backup_${sanitizedName}_${backup.id}.json`;
+
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/json');
+      res.send(backup.snapshotData);
     } catch (error: any) {
-      console.error('Failed to delete log type:', error);
-      res.status(500).json({ error: error.message || 'Failed to delete log type' });
+      console.error('Failed to download JSON backup:', error);
+      res.status(500).json({ error: error.message || 'Failed to download backup' });
     }
   });
 
-  // Seed sample log types
-  app.post('/api/seed-defaults', requireAuth, async (req: AuthRequest, res) => {
+  // Download backup as SQL dump file
+  app.get('/api/backups/:id/download-sql', requireAuth, async (req: AuthRequest, res) => {
     try {
       const userId = req.dbUser?.id;
-      const sampleNames = ['Expenses', 'Income'];
-      const current = await getLogTypes(userId);
-      const existingNames = new Set(current.map(c => c.name.toUpperCase()));
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid backup ID' });
 
-      const createdList = [];
-      for (const sName of sampleNames) {
-        if (!existingNames.has(sName.toUpperCase())) {
-          try {
-            const created = await createLogType({ name: sName, userId });
-            createdList.push(created);
-          } catch {
-            // Ignore if skipped
-          }
-        }
-      }
-      const all = await getLogTypes(userId);
-      res.json({ message: `Seeded ${createdList.length} default log types.`, logTypes: all });
+      const backup = await getBackupById(id, userId);
+      if (!backup) return res.status(404).json({ error: 'Backup not found' });
+
+      const snapshot = JSON.parse(backup.snapshotData);
+      const sqlContent = generateSqlDump(snapshot);
+      const sanitizedName = backup.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      const filename = `db_backup_${sanitizedName}_${backup.id}.sql`;
+
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/sql');
+      res.send(sqlContent);
     } catch (error: any) {
-      console.error('Failed to seed defaults:', error);
-      res.status(500).json({ error: error.message || 'Failed to seed sample log types' });
+      console.error('Failed to download SQL backup:', error);
+      res.status(500).json({ error: error.message || 'Failed to generate SQL dump' });
+    }
+  });
+
+  // Live export current database as JSON download
+  app.get('/api/backups/export/live-json', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const snapshot = await compileLiveSnapshot(userId, 'manual');
+      const filename = `live_database_export_${new Date().toISOString().split('T')[0]}.json`;
+
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/json');
+      res.send(JSON.stringify(snapshot, null, 2));
+    } catch (error: any) {
+      console.error('Failed to export live database:', error);
+      res.status(500).json({ error: error.message || 'Failed to export live database' });
+    }
+  });
+
+  // Live export current database as SQL dump download
+  app.get('/api/backups/export/live-sql', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const snapshot = await compileLiveSnapshot(userId, 'manual');
+      const sqlContent = generateSqlDump(snapshot);
+      const filename = `live_database_dump_${new Date().toISOString().split('T')[0]}.sql`;
+
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/sql');
+      res.send(sqlContent);
+    } catch (error: any) {
+      console.error('Failed to export live SQL database:', error);
+      res.status(500).json({ error: error.message || 'Failed to export live SQL database' });
+    }
+  });
+
+  // Restore database from an existing backup record ID
+  app.post('/api/backups/:id/restore', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid backup ID' });
+
+      const backup = await getBackupById(id, userId);
+      if (!backup) return res.status(404).json({ error: 'Backup not found' });
+
+      const snapshot = JSON.parse(backup.snapshotData);
+      const result = await restoreDatabaseFromSnapshot(snapshot, userId);
+
+      res.json({
+        message: `Database successfully restored from backup '${backup.name}'`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('Failed to restore backup:', error);
+      res.status(500).json({ error: error.message || 'Failed to restore database from backup' });
+    }
+  });
+
+  // Restore database from uploaded JSON payload
+  app.post('/api/backups/restore-payload', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const { snapshot } = req.body || {};
+      if (!snapshot || !snapshot.tables) {
+        return res.status(400).json({ error: 'Invalid snapshot payload. Missing tables property.' });
+      }
+
+      const result = await restoreDatabaseFromSnapshot(snapshot, userId);
+      res.json({
+        message: 'Database successfully restored from uploaded JSON snapshot',
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('Failed to restore from payload:', error);
+      res.status(500).json({ error: error.message || 'Failed to restore database from snapshot' });
+    }
+  });
+
+  // Delete a backup
+  app.delete('/api/backups/:id', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.dbUser?.id;
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid backup ID' });
+
+      const success = await deleteDatabaseBackup(id, userId);
+      if (!success) return res.status(404).json({ error: 'Backup not found or already deleted' });
+
+      res.json({ success: true, message: `Backup with ID ${id} deleted.` });
+    } catch (error: any) {
+      console.error('Failed to delete backup:', error);
+      res.status(500).json({ error: error.message || 'Failed to delete backup' });
     }
   });
 
@@ -724,6 +886,22 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+
+    // Run automated monthly backup check on startup and schedule every 24 hours
+    const runMonthlyBackupJob = async () => {
+      try {
+        const result = await checkAndCreateMonthlyBackup();
+        console.log('[Automatic Monthly Backup Service]', result.reason);
+      } catch (err) {
+        console.warn('[Automatic Monthly Backup Service] Check notice:', err);
+      }
+    };
+
+    // Initial check 5 seconds after boot
+    setTimeout(runMonthlyBackupJob, 5000);
+
+    // Periodic check every 24 hours (86,400,000 ms)
+    setInterval(runMonthlyBackupJob, 24 * 60 * 60 * 1000);
   });
 }
 

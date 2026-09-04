@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, FileText, Tag, Folder, DollarSign, AlertCircle, Check, Loader2, CloudOff } from 'lucide-react';
-import { LogItem, LogTypeItem, CategoryTypeItem, TagTypeItem } from '../types.ts';
+import { X, Calendar, FileText, Tag, Folder, DollarSign, AlertCircle, Check } from 'lucide-react';
+import { LogItem, CategoryTypeItem, TagTypeItem } from '../types.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useOffline } from '../context/OfflineContext.tsx';
 
 interface EditLogModalProps {
   isOpen: boolean;
@@ -13,7 +12,6 @@ interface EditLogModalProps {
     data: {
       logDate: string;
       logDescription?: string;
-      logTypeId?: number;
       logAmount?: string;
       logCategory?: number;
       reconciled?: boolean;
@@ -29,16 +27,13 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
   onUpdate,
 }) => {
   const { authFetch } = useAuth();
-  const { effectiveOffline, readCachedData, writeCachedData } = useOffline();
   const [logDate, setLogDate] = useState('');
   const [logDescription, setLogDescription] = useState('');
-  const [logTypeId, setLogTypeId] = useState<string>('');
   const [logAmount, setLogAmount] = useState<string>('');
   const [logCategory, setLogCategory] = useState<string>('');
   const [reconciled, setReconciled] = useState<boolean>(true);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
 
-  const [logTypes, setLogTypes] = useState<LogTypeItem[]>([]);
   const [categoryTypes, setCategoryTypes] = useState<CategoryTypeItem[]>([]);
   const [tagTypes, setTagTypes] = useState<TagTypeItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -46,53 +41,26 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      const cachedLogTypes = readCachedData<LogTypeItem>('log_type');
-      const cachedCategories = readCachedData<CategoryTypeItem>('category_type');
-      const cachedTags = readCachedData<TagTypeItem>('tag_type');
+      authFetch('/api/category-types')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) setCategoryTypes(d);
+        })
+        .catch(() => {});
 
-      if (cachedLogTypes.length > 0) setLogTypes(cachedLogTypes);
-      if (cachedCategories.length > 0) setCategoryTypes(cachedCategories);
-      if (cachedTags.length > 0) setTagTypes(cachedTags);
-
-      if (!effectiveOffline) {
-        authFetch('/api/log-types')
-          .then((r) => r.json())
-          .then((d) => {
-            if (Array.isArray(d)) {
-              setLogTypes(d);
-              writeCachedData('log_type', d);
-            }
-          })
-          .catch(() => {});
-
-        authFetch('/api/category-types')
-          .then((r) => r.json())
-          .then((d) => {
-            if (Array.isArray(d)) {
-              setCategoryTypes(d);
-              writeCachedData('category_type', d);
-            }
-          })
-          .catch(() => {});
-
-        authFetch('/api/tag-types')
-          .then((r) => r.json())
-          .then((d) => {
-            if (Array.isArray(d)) {
-              setTagTypes(d);
-              writeCachedData('tag_type', d);
-            }
-          })
-          .catch(() => {});
-      }
+      authFetch('/api/tag-types')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d)) setTagTypes(d);
+        })
+        .catch(() => {});
     }
-  }, [isOpen, effectiveOffline]);
+  }, [isOpen]);
 
   useEffect(() => {
     if (log && isOpen) {
       setLogDate(log.logDate || '');
       setLogDescription(log.logDescription || '');
-      setLogTypeId(log.logTypeId ? String(log.logTypeId) : '');
       setLogAmount(log.logAmount ? String(log.logAmount) : '');
       setLogCategory(log.logCategory ? String(log.logCategory) : '');
       setReconciled(log.reconciled !== false);
@@ -122,7 +90,6 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
     const result = await onUpdate(log.id, {
       logDate,
       logDescription: logDescription.trim() || undefined,
-      logTypeId: logTypeId ? Number(logTypeId) : undefined,
       logAmount: logAmount.trim() || undefined,
       logCategory: logCategory ? Number(logCategory) : undefined,
       reconciled,
@@ -168,13 +135,6 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
-          {effectiveOffline && (
-            <div id="edit-log-offline-notice" className="p-2.5 bg-amber-50/80 border border-amber-200 text-amber-900 text-xs rounded-lg flex items-center gap-2">
-              <CloudOff className="w-4 h-4 text-amber-600 shrink-0" />
-              <span><strong>Offline Collection Mode:</strong> Updates will be saved locally and pushed when connection is restored.</span>
-            </div>
-          )}
-
           {errorMsg && (
             <div
               id="edit-log-modal-error"
@@ -211,7 +171,7 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
                 id="edit-log-amount-input"
                 type="number"
                 step="0.01"
-                placeholder="0.00"
+                placeholder="0.00 (positive: income, negative: expense)"
                 value={logAmount}
                 onChange={(e) => setLogAmount(e.target.value)}
                 className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-black transition-colors font-mono"
@@ -223,73 +183,48 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
           <div>
             <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
               <FileText className="w-3.5 h-3.5 text-gray-400" />
-              <span>Description</span>
+              <span>Log Description</span>
             </label>
-            <textarea
+            <input
               id="edit-log-description-input"
-              rows={2}
-              placeholder="e.g. Q3 Cloud infrastructure invoice..."
+              type="text"
               value={logDescription}
               onChange={(e) => setLogDescription(e.target.value)}
-              className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-black transition-colors"
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-black transition-colors font-mono"
             />
           </div>
 
-          {/* Type & Category Foreign Keys */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Tag className="w-3.5 h-3.5 text-gray-400" />
-                <span>Log Type (`log_type_id`)</span>
-              </label>
-              <select
-                id="edit-log-type-select"
-                value={logTypeId}
-                onChange={(e) => setLogTypeId(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 focus:outline-none focus:border-black transition-colors font-mono"
-              >
-                <option value="">-- Select Type --</option>
-                {logTypes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    #{t.id} - {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Folder className="w-3.5 h-3.5 text-gray-400" />
-                <span>Category (`log_category`)</span>
-              </label>
-              <select
-                id="edit-log-category-select"
-                value={logCategory}
-                onChange={(e) => setLogCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 focus:outline-none focus:border-black transition-colors font-mono"
-              >
-                <option value="">-- Select Category --</option>
-                {categoryTypes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    #{c.id} - {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Category (FK) */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <Folder className="w-3.5 h-3.5 text-gray-400" />
+              <span>Category (FK)</span>
+            </label>
+            <select
+              id="edit-log-category-select"
+              value={logCategory}
+              onChange={(e) => setLogCategory(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-gray-200 rounded text-sm text-gray-900 focus:outline-none focus:border-black transition-colors font-mono"
+            >
+              <option value="">Select category_type...</option>
+              {categoryTypes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  #{c.id} - {c.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Reconciled (boolean) */}
-          <div id="edit-log-reconciled-container" className="p-3 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between">
+          <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between">
             <div>
               <label htmlFor="edit-log-reconciled-checkbox" className="text-xs font-semibold text-gray-800 flex items-center gap-1.5 cursor-pointer">
                 <span>Reconciled</span>
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium ${
-                  reconciled ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                }`}>
-                  {reconciled ? 'Reconciled (True)' : 'Pending (False)'}
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-100 text-emerald-700">
+                  boolean
                 </span>
               </label>
-              <p className="text-[11px] text-gray-500 mt-0.5">Toggle reconciliation status for this transaction entry.</p>
+              <p className="text-[11px] text-gray-500 mt-0.5">Toggle reconciliation status</p>
             </div>
             <input
               id="edit-log-reconciled-checkbox"
@@ -301,14 +236,14 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
           </div>
 
           {/* Tag Type Selection List (tag_type) */}
-          <div id="edit-tag-type-selection-container" className="pt-1">
+          <div className="pt-1">
             <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
               <div className="flex items-center gap-1">
                 <Tag className="w-3.5 h-3.5 text-purple-600" />
-                <span>Tag Type Selection List</span>
+                <span>Associated Tags (`tag_type`)</span>
               </div>
               <span className="text-[11px] text-gray-400 font-normal font-mono">
-                {selectedTagIds.length} selected
+                {selectedTagIds.length} active
               </span>
             </label>
 
@@ -317,42 +252,33 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
                 No `tag_type` entries found in the database.
               </div>
             ) : (
-              <div className="space-y-2">
-                <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-2 bg-gray-50/70 border border-gray-100 rounded-lg">
-                  {tagTypes.map((tag) => {
-                    const isSelected = selectedTagIds.includes(tag.id);
-                    return (
-                      <button
-                        key={tag.id}
-                        id={`edit-select-tag-btn-${tag.id}`}
-                        type="button"
-                        onClick={() => toggleTag(tag.id)}
-                        className={`px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer border ${
-                          isSelected
-                            ? 'bg-purple-600 text-white border-purple-700 shadow-xs'
-                            : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300 hover:bg-purple-50/50'
-                        }`}
-                      >
-                        {isSelected ? (
-                          <Check className="w-3 h-3 text-white" />
-                        ) : (
-                          <Tag className="w-3 h-3 text-gray-400" />
-                        )}
-                        <span>{tag.name}</span>
-                        <span
-                          className={`text-[10px] font-mono ${
-                            isSelected ? 'text-purple-200' : 'text-gray-400'
-                          }`}
-                        >
-                          #{tag.id}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-[11px] text-gray-400">
-                  Select tags to associate with this log entry via `tag_log_assn`.
-                </p>
+              <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-2 bg-gray-50/70 border border-gray-100 rounded-lg">
+                {tagTypes.map((tag) => {
+                  const isSelected = selectedTagIds.includes(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      id={`edit-select-tag-btn-${tag.id}`}
+                      type="button"
+                      onClick={() => toggleTag(tag.id)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer border ${
+                        isSelected
+                          ? 'bg-purple-600 text-white border-purple-700 shadow-xs'
+                          : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300 hover:bg-purple-50/50'
+                      }`}
+                    >
+                      {isSelected ? (
+                        <Check className="w-3 h-3 text-white" />
+                      ) : (
+                        <Tag className="w-3 h-3 text-gray-400" />
+                      )}
+                      <span>{tag.name}</span>
+                      <span className={`text-[10px] font-mono ${isSelected ? 'text-purple-200' : 'text-gray-400'}`}>
+                        #{tag.id}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -362,7 +288,7 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
               id="cancel-edit-log-btn"
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-gray-700 hover:text-black border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+              className="px-4 py-2 text-xs font-medium text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors"
             >
               Cancel
             </button>
@@ -370,11 +296,11 @@ export const EditLogModal: React.FC<EditLogModalProps> = ({
               id="submit-edit-log-btn"
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-2 text-xs font-medium text-white bg-black hover:bg-gray-800 rounded flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              className="px-4 py-2 bg-black text-white text-xs font-medium rounded-lg hover:bg-gray-800 transition-colors shadow-xs disabled:opacity-50 flex items-center gap-2"
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                   <span>Saving...</span>
                 </>
               ) : (

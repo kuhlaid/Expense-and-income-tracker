@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { LogTypeItem, LogItem, StarterLogItem, TagLogAssnItem, SchemaColumn } from './types.ts';
-import { LogTypeTable } from './components/LogTypeTable.tsx';
-import { AddLogTypeModal } from './components/AddLogTypeModal.tsx';
+import { LogItem, StarterLogItem, TagLogAssnItem, SchemaColumn } from './types.ts';
+import { LookupTable } from './components/LookupTable.tsx';
+import { AddLookupModal } from './components/AddLookupModal.tsx';
 import { LogsTable } from './components/LogsTable.tsx';
 import { AddLogModal } from './components/AddLogModal.tsx';
 import { StarterLogsTable } from './components/StarterLogsTable.tsx';
@@ -11,9 +11,10 @@ import { AddTagLogAssnModal } from './components/AddTagLogAssnModal.tsx';
 import { SchemaInspector } from './components/SchemaInspector.tsx';
 import { UsersTable } from './components/UsersTable.tsx';
 import { LoginScreen } from './components/LoginScreen.tsx';
-import { OfflineSyncDrawer } from './components/OfflineSyncDrawer.tsx';
+import { CsvImportModal } from './components/CsvImportModal.tsx';
+import { DatabaseBackupsModal } from './components/DatabaseBackupsModal.tsx';
+import { LogsSummaryPage } from './components/LogsSummaryPage.tsx';
 import { useAuth } from './context/AuthContext.tsx';
-import { useOffline } from './context/OfflineContext.tsx';
 import {
   Plus,
   RefreshCw,
@@ -21,39 +22,32 @@ import {
   Sparkles,
   CheckCircle2,
   AlertCircle,
-  Table,
   Tag,
   Folder,
-  FileText,
   ListOrdered,
   Link2,
   BookmarkCheck,
   LogOut,
   User as UserIcon,
-  CloudOff,
-  Wifi,
-  WifiOff,
-  Inbox,
-  Database,
+  FileSpreadsheet,
+  ShieldCheck,
+  TableProperties,
 } from 'lucide-react';
+
+interface SimpleLookupRecord {
+  id: number;
+  name: string;
+  created_at?: string | null;
+}
 
 export default function App() {
   const { user, loading: authLoading, signOutUser, authFetch } = useAuth();
-  const {
-    isOnline,
-    isSimulatedOffline,
-    effectiveOffline,
-    pendingCount,
-    collectOfflineRecord,
-    readCachedData,
-    writeCachedData,
-    toggleSimulatedOffline,
-    syncNow,
-    isSyncing,
-  } = useOffline();
 
-  const [selectedTable, setSelectedTable] = useState<'logs' | 'starter_logs' | 'tag_log_assn' | 'category_type' | 'tag_type' | 'log_type' | 'users'>('logs');
-  const [records, setRecords] = useState<LogTypeItem[]>([]);
+  const [selectedTable, setSelectedTable] = useState<
+    'logs' | 'starter_logs' | 'tag_log_assn' | 'category_type' | 'tag_type' | 'users' | 'summary'
+  >('logs');
+
+  const [records, setRecords] = useState<SimpleLookupRecord[]>([]);
   const [logsList, setLogsList] = useState<LogItem[]>([]);
   const [starterLogsList, setStarterLogsList] = useState<StarterLogItem[]>([]);
   const [assnList, setAssnList] = useState<TagLogAssnItem[]>([]);
@@ -62,7 +56,6 @@ export default function App() {
   const [assnCount, setAssnCount] = useState<number>(0);
   const [categoryCount, setCategoryCount] = useState<number>(0);
   const [tagCount, setTagCount] = useState<number>(0);
-  const [logCount, setLogCount] = useState<number>(0);
   const [schemaColumns, setSchemaColumns] = useState<SchemaColumn[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSchemaLoading, setIsSchemaLoading] = useState(false);
@@ -70,10 +63,11 @@ export default function App() {
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
   const [isStarterLogModalOpen, setIsStarterLogModalOpen] = useState(false);
   const [isAssnModalOpen, setIsAssnModalOpen] = useState(false);
-  const [isOfflineDrawerOpen, setIsOfflineDrawerOpen] = useState(false);
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [isBackupsModalOpen, setIsBackupsModalOpen] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'records' | 'definition' | 'sql'>('records');
+  const [activeTab, setActiveTab] = useState<'records' | 'summary' | 'definition' | 'sql'>('records');
   const [bannerNotice, setBannerNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showNotice = (type: 'success' | 'error', message: string) => {
@@ -87,9 +81,10 @@ export default function App() {
   const isStarterLogs = selectedTable === 'starter_logs';
   const isAssn = selectedTable === 'tag_log_assn';
   const isUsers = selectedTable === 'users';
+  const isSummary = selectedTable === 'summary';
 
   const apiBase =
-    selectedTable === 'logs'
+    selectedTable === 'logs' || selectedTable === 'summary'
       ? '/api/logs'
       : selectedTable === 'starter_logs'
       ? '/api/starter-logs'
@@ -97,9 +92,7 @@ export default function App() {
       ? '/api/tag-log-assns'
       : selectedTable === 'category_type'
       ? '/api/category-types'
-      : selectedTable === 'tag_type'
-      ? '/api/tag-types'
-      : '/api/log-types';
+      : '/api/tag-types';
 
   const tableLabel =
     selectedTable === 'logs'
@@ -114,7 +107,7 @@ export default function App() {
       ? 'Tag Type'
       : selectedTable === 'users'
       ? 'Users'
-      : 'Log Type';
+      : 'Logs Summary';
 
   const fetchRecords = async () => {
     if (!user) return;
@@ -125,27 +118,13 @@ export default function App() {
         return;
       }
 
-      if (effectiveOffline) {
-        // Load from local storage cache immediately
-        const cached = readCachedData(selectedTable);
-        if (selectedTable === 'logs') {
-          setLogsList(Array.isArray(cached) ? cached : []);
-          setLogsCount(Array.isArray(cached) ? cached.length : 0);
-        } else if (selectedTable === 'starter_logs') {
-          setStarterLogsList(Array.isArray(cached) ? cached : []);
-          setStarterLogsCount(Array.isArray(cached) ? cached.length : 0);
-        } else if (selectedTable === 'tag_log_assn') {
-          setAssnList(Array.isArray(cached) ? cached : []);
-          setAssnCount(Array.isArray(cached) ? cached.length : 0);
-        } else {
-          setRecords(Array.isArray(cached) ? cached : []);
-          if (selectedTable === 'category_type') {
-            setCategoryCount(cached.length);
-          } else if (selectedTable === 'tag_type') {
-            setTagCount(cached.length);
-          } else if (selectedTable === 'log_type') {
-            setLogCount(cached.length);
-          }
+      if (selectedTable === 'summary') {
+        const res = await authFetch('/api/logs');
+        if (res.ok) {
+          const list = await res.json();
+          const arr = Array.isArray(list) ? list : [];
+          setLogsList(arr);
+          setLogsCount(arr.length);
         }
         setIsLoading(false);
         return;
@@ -153,27 +132,10 @@ export default function App() {
 
       const res = await authFetch(apiBase);
       if (!res.ok) {
-        // If server error, fallback to offline cache
-        const cached = readCachedData(selectedTable);
-        if (cached && cached.length > 0) {
-          if (selectedTable === 'logs') {
-            setLogsList(cached);
-            setLogsCount(cached.length);
-          } else if (selectedTable === 'starter_logs') {
-            setStarterLogsList(cached);
-            setStarterLogsCount(cached.length);
-          } else if (selectedTable === 'tag_log_assn') {
-            setAssnList(cached);
-            setAssnCount(cached.length);
-          } else {
-            setRecords(cached);
-          }
-        }
         throw new Error(`Failed to fetch ${selectedTable} records`);
       }
       const data = await res.json();
       const list = Array.isArray(data) ? data : [];
-      writeCachedData(selectedTable, list);
 
       if (selectedTable === 'logs') {
         setLogsList(list);
@@ -190,22 +152,21 @@ export default function App() {
           setCategoryCount(list.length);
         } else if (selectedTable === 'tag_type') {
           setTagCount(list.length);
-        } else if (selectedTable === 'log_type') {
-          setLogCount(list.length);
         }
       }
     } catch (err: any) {
       console.error(err);
-      if (!effectiveOffline) {
-        showNotice('error', err.message || `Failed to load records from Cloud SQL`);
-      }
+      showNotice('error', err.message || `Failed to load records from Cloud SQL`);
     } finally {
       setIsLoading(false);
     }
   };
 
   const fetchSchema = async () => {
-    if (!user) return;
+    if (!user || selectedTable === 'users' || selectedTable === 'summary') {
+      setIsSchemaLoading(false);
+      return;
+    }
     setIsSchemaLoading(true);
     try {
       const res = await authFetch(`/api/table-schema?table=${selectedTable}`);
@@ -223,100 +184,51 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    if (effectiveOffline) {
-      const cachedLogs = readCachedData('logs');
-      const cachedStarter = readCachedData('starter_logs');
-      const cachedAssn = readCachedData('tag_log_assn');
-      const cachedCategory = readCachedData('category_type');
-      const cachedTag = readCachedData('tag_type');
-      const cachedLogType = readCachedData('log_type');
-
-      setLogsCount(cachedLogs.length);
-      setStarterLogsCount(cachedStarter.length);
-      setAssnCount(cachedAssn.length);
-      setCategoryCount(cachedCategory.length);
-      setTagCount(cachedTag.length);
-      setLogCount(cachedLogType.length);
-      return;
-    }
-
     authFetch('/api/logs')
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d)) {
-          setLogsCount(d.length);
-          writeCachedData('logs', d);
-        }
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) setLogsCount(d.length);
       })
       .catch(() => {});
 
     authFetch('/api/starter-logs')
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d)) {
-          setStarterLogsCount(d.length);
-          writeCachedData('starter_logs', d);
-        }
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) setStarterLogsCount(d.length);
       })
       .catch(() => {});
 
     authFetch('/api/tag-log-assns')
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d)) {
-          setAssnCount(d.length);
-          writeCachedData('tag_log_assn', d);
-        }
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) setAssnCount(d.length);
       })
       .catch(() => {});
 
     authFetch('/api/category-types')
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d)) {
-          setCategoryCount(d.length);
-          writeCachedData('category_type', d);
-        }
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) setCategoryCount(d.length);
       })
       .catch(() => {});
 
     authFetch('/api/tag-types')
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d)) {
-          setTagCount(d.length);
-          writeCachedData('tag_type', d);
-        }
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) setTagCount(d.length);
       })
       .catch(() => {});
-
-    authFetch('/api/log-types')
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d)) {
-          setLogCount(d.length);
-          writeCachedData('log_type', d);
-        }
-      })
-      .catch(() => {});
-  }, [user, effectiveOffline]);
+  }, [user]);
 
   useEffect(() => {
     if (user) {
       fetchRecords();
       fetchSchema();
     }
-  }, [selectedTable, user, effectiveOffline]);
+  }, [selectedTable, user]);
 
   const handleAddRecord = async (name: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      if (effectiveOffline) {
-        const tempId = collectOfflineRecord('CREATE_LOOKUP', selectedTable, undefined, { name });
-        showNotice('success', `Created ${tableLabel} "${name}" (ID #${tempId}, saved offline)`);
-        fetchRecords();
-        return { success: true };
-      }
-
       const res = await authFetch(apiBase, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -337,20 +249,12 @@ export default function App() {
   const handleAddLog = async (data: {
     logDate: string;
     logDescription?: string;
-    logTypeId?: number;
     logAmount?: string;
     logCategory?: number;
     reconciled?: boolean;
     tagIds?: number[];
   }): Promise<{ success: boolean; error?: string }> => {
     try {
-      if (effectiveOffline) {
-        const tempId = collectOfflineRecord('CREATE_LOG', 'logs', undefined, data);
-        showNotice('success', `Created log record #${tempId} for ${data.logDate} (saved offline)`);
-        fetchRecords();
-        return { success: true };
-      }
-
       const res = await authFetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -373,7 +277,6 @@ export default function App() {
     data: {
       logDate?: string;
       logDescription?: string;
-      logTypeId?: number;
       logAmount?: string;
       logCategory?: number;
       reconciled?: boolean;
@@ -381,13 +284,6 @@ export default function App() {
     }
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      if (effectiveOffline) {
-        collectOfflineRecord('UPDATE_LOG', 'logs', id, data);
-        showNotice('success', `Updated log record #${id} (saved offline)`);
-        fetchRecords();
-        return { success: true };
-      }
-
       const res = await authFetch(`/api/logs/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -408,19 +304,11 @@ export default function App() {
   const handleAddStarterLog = async (data: {
     logDate?: string;
     logDescription?: string;
-    logTypeId?: number;
     logAmount?: string;
     logCategory?: number;
     reconciled?: boolean;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
-      if (effectiveOffline) {
-        const tempId = collectOfflineRecord('CREATE_STARTER_LOG', 'starter_logs', undefined, data);
-        showNotice('success', `Created starter log record #${tempId} (saved offline)`);
-        fetchRecords();
-        return { success: true };
-      }
-
       const res = await authFetch('/api/starter-logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -443,20 +331,12 @@ export default function App() {
     data: {
       logDate?: string;
       logDescription?: string;
-      logTypeId?: number;
       logAmount?: string;
       logCategory?: number;
       reconciled?: boolean;
     }
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      if (effectiveOffline) {
-        collectOfflineRecord('UPDATE_STARTER_LOG', 'starter_logs', id, data);
-        showNotice('success', `Updated starter log #${id} (saved offline)`);
-        fetchRecords();
-        return { success: true };
-      }
-
       const res = await authFetch(`/api/starter-logs/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -479,13 +359,6 @@ export default function App() {
     logId: number;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
-      if (effectiveOffline) {
-        const tempId = collectOfflineRecord('CREATE_TAG_LOG_ASSN', 'tag_log_assn', undefined, data);
-        showNotice('success', `Created association #${tempId} (saved offline)`);
-        fetchRecords();
-        return { success: true };
-      }
-
       const res = await authFetch('/api/tag-log-assns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -505,13 +378,6 @@ export default function App() {
 
   const handleUpdateRecord = async (id: number, newName: string): Promise<boolean> => {
     try {
-      if (effectiveOffline) {
-        collectOfflineRecord('UPDATE_LOOKUP', selectedTable, id, { name: newName });
-        showNotice('success', `Updated ${tableLabel} #${id} to "${newName}" (saved offline)`);
-        fetchRecords();
-        return true;
-      }
-
       const res = await authFetch(`${apiBase}/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -533,21 +399,6 @@ export default function App() {
 
   const handleDeleteRecord = async (id: number): Promise<boolean> => {
     try {
-      if (effectiveOffline) {
-        const op =
-          selectedTable === 'logs'
-            ? 'DELETE_LOG'
-            : selectedTable === 'starter_logs'
-            ? 'DELETE_STARTER_LOG'
-            : selectedTable === 'tag_log_assn'
-            ? 'DELETE_TAG_LOG_ASSN'
-            : 'DELETE_LOOKUP';
-        collectOfflineRecord(op, selectedTable, id);
-        showNotice('success', `Deleted record #${id} (queued offline)`);
-        fetchRecords();
-        return true;
-      }
-
       const res = await authFetch(`${apiBase}/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
@@ -566,16 +417,10 @@ export default function App() {
   const handleSeedDefaults = async () => {
     setIsSeeding(true);
     try {
-      if (effectiveOffline) {
-        showNotice('error', 'Seeding presets requires an active online connection to Cloud SQL.');
-        return;
-      }
       const endpoint =
         selectedTable === 'category_type'
           ? '/api/category-types/seed-defaults'
-          : selectedTable === 'tag_type'
-          ? '/api/tag-types/seed-defaults'
-          : '/api/seed-defaults';
+          : '/api/tag-types/seed-defaults';
       const res = await authFetch(endpoint, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to seed');
@@ -590,13 +435,6 @@ export default function App() {
 
   const handleClearAll = async () => {
     try {
-      if (effectiveOffline) {
-        collectOfflineRecord('CLEAR_TABLE', selectedTable);
-        showNotice('success', `Cleared all records from ${selectedTable} (queued offline).`);
-        fetchRecords();
-        return;
-      }
-
       const res = await authFetch(apiBase, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to clear records');
@@ -624,15 +462,16 @@ export default function App() {
     return <LoginScreen />;
   }
 
-  const totalRowCount = isLogs
-    ? logsList.length
-    : isStarterLogs
-    ? starterLogsList.length
-    : isAssn
-    ? assnList.length
-    : isUsers
-    ? 1
-    : records.length;
+  const totalRowCount =
+    isLogs || isSummary
+      ? logsList.length
+      : isStarterLogs
+      ? starterLogsList.length
+      : isAssn
+      ? assnList.length
+      : isUsers
+      ? 1
+      : records.length;
 
   return (
     <div id="app-root" className="flex flex-col min-h-screen bg-white font-sans text-gray-900 selection:bg-gray-100">
@@ -652,56 +491,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2.5">
-          {/* Offline Sync Outbox & Connection Status */}
-          <div className="flex items-center gap-1.5">
-            <button
-              id="offline-outbox-btn"
-              type="button"
-              onClick={() => setIsOfflineDrawerOpen(true)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all shadow-xs ${
-                effectiveOffline
-                  ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
-                  : pendingCount > 0
-                  ? 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
-                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-              }`}
-              title="Open Offline Outbox & Synchronization Queue"
-            >
-              {effectiveOffline ? (
-                <WifiOff className="w-3.5 h-3.5 animate-pulse" />
-              ) : (
-                <Wifi className="w-3.5 h-3.5 text-emerald-600" />
-              )}
-              <span className="hidden sm:inline">
-                {effectiveOffline ? 'Offline Mode' : 'Online'}
-              </span>
-              {pendingCount > 0 && (
-                <span
-                  id="pending-queue-badge"
-                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold font-mono ${
-                    effectiveOffline ? 'bg-black/40 text-white' : 'bg-amber-600 text-white'
-                  }`}
-                >
-                  {pendingCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              id="toggle-offline-simulation-btn"
-              type="button"
-              onClick={toggleSimulatedOffline}
-              title={isSimulatedOffline ? 'Switch back to online mode' : 'Simulate offline network mode'}
-              className={`p-1.5 rounded-lg border text-xs transition-colors ${
-                isSimulatedOffline
-                  ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
-                  : 'bg-white border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50'
-              }`}
-            >
-              <CloudOff className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
           {/* User Account Info & Sign Out */}
           <div className="flex items-center gap-2 px-2.5 py-1 bg-gray-50 border border-gray-200 rounded-lg text-xs">
             {user.photoURL ? (
@@ -743,7 +532,7 @@ export default function App() {
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
 
-          {!isUsers && totalRowCount > 0 && (
+          {!isUsers && !isSummary && totalRowCount > 0 && (
             <button
               id="clear-all-btn"
               type="button"
@@ -755,7 +544,7 @@ export default function App() {
             </button>
           )}
 
-          {!isLogs && !isStarterLogs && !isAssn && !isUsers && (
+          {!isLogs && !isStarterLogs && !isAssn && !isUsers && !isSummary && (
             <button
               id="seed-presets-btn"
               type="button"
@@ -768,12 +557,72 @@ export default function App() {
             </button>
           )}
 
+          {(isLogs || isStarterLogs) && (
+            <button
+              id="header-import-csv-btn"
+              type="button"
+              onClick={() => setIsCsvModalOpen(true)}
+              className="px-3.5 py-2 text-sm border border-emerald-300 text-emerald-800 bg-emerald-50/80 hover:bg-emerald-100 rounded flex items-center gap-1.5 transition-colors font-medium shadow-2xs"
+              title="Import records from CSV file or load the 220 default records"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+              <span>Import CSV</span>
+            </button>
+          )}
+
+          {/* Quick toggle between Summary/Pivot and Table view */}
+          {isSummary || activeTab === 'summary' ? (
+            <button
+              id="header-view-logs-btn"
+              type="button"
+              onClick={() => {
+                setSelectedTable('logs');
+                setActiveTab('records');
+              }}
+              className="px-3.5 py-2 text-sm border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 rounded flex items-center gap-1.5 transition-colors font-medium shadow-2xs"
+              title="Return to full Logs table"
+            >
+              <ListOrdered className="w-4 h-4 text-gray-600" />
+              <span>Logs Table</span>
+            </button>
+          ) : (
+            <button
+              id="header-summary-pivot-btn"
+              type="button"
+              onClick={() => {
+                setSelectedTable('logs');
+                setActiveTab('summary');
+              }}
+              className={`px-3.5 py-2 text-sm border rounded flex items-center gap-1.5 transition-colors font-medium shadow-2xs ${
+                isLogs
+                  ? 'border-indigo-300 text-indigo-800 bg-indigo-50/80 hover:bg-indigo-100'
+                  : 'border-gray-200 text-gray-700 bg-white hover:bg-gray-50'
+              }`}
+              title="Open Logs Summary & Pivot Analysis"
+            >
+              <TableProperties className="w-4 h-4 text-indigo-600" />
+              <span>Summary &amp; Pivot</span>
+            </button>
+          )}
+
+          <button
+            id="header-database-backups-btn"
+            type="button"
+            onClick={() => setIsBackupsModalOpen(true)}
+            className="px-3.5 py-2 text-sm border border-indigo-200 text-indigo-800 bg-indigo-50/70 hover:bg-indigo-100 rounded flex items-center gap-1.5 transition-colors font-medium shadow-2xs"
+            title="Manage monthly database backups, point-in-time snapshots, and recovery"
+          >
+            <ShieldCheck className="w-4 h-4 text-indigo-600" />
+            <span>Backups</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white" title="Auto-monthly backup active" />
+          </button>
+
           {!isUsers && (
             <button
               id="open-add-modal-btn"
               type="button"
               onClick={() => {
-                if (isLogs) {
+                if (isLogs || isSummary) {
                   setIsLogModalOpen(true);
                 } else if (isStarterLogs) {
                   setIsStarterLogModalOpen(true);
@@ -786,45 +635,11 @@ export default function App() {
               className="px-4 py-2 text-sm bg-black text-white rounded hover:bg-gray-800 flex items-center gap-1.5 transition-colors shadow-xs"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>{isLogs ? 'Add Log' : isStarterLogs ? 'Add Starter Log' : isAssn ? 'Add Association' : `Add ${tableLabel}`}</span>
+              <span>{isLogs || isSummary ? 'Add Log' : isStarterLogs ? 'Add Starter Log' : isAssn ? 'Add Association' : `Add ${tableLabel}`}</span>
             </button>
           )}
         </div>
       </header>
-
-      {/* Offline Status Persistent Strip */}
-      {effectiveOffline && (
-        <div
-          id="offline-banner-notice"
-          className="bg-amber-500 text-white px-6 py-2 flex items-center justify-between text-xs font-medium shadow-inner"
-        >
-          <div className="flex items-center gap-2">
-            <WifiOff className="w-4 h-4 animate-pulse shrink-0" />
-            <span>
-              <strong>Offline Data Collection Active</strong> — You can freely create, edit, and delete logs, starter logs, categories, and tags. All changes are stored safely in local browser storage and will sync to Cloud SQL.
-            </span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setIsOfflineDrawerOpen(true)}
-              className="px-2.5 py-1 bg-white/20 hover:bg-white/30 rounded text-white text-xs font-semibold transition-colors flex items-center gap-1"
-            >
-              <Inbox className="w-3 h-3" />
-              <span>Outbox ({pendingCount})</span>
-            </button>
-            {isSimulatedOffline && (
-              <button
-                type="button"
-                onClick={toggleSimulatedOffline}
-                className="px-2.5 py-1 bg-black/20 hover:bg-black/30 rounded text-white text-xs transition-colors"
-              >
-                Disable Simulation
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Main Body with Sidebar and Content Area */}
       <div className="flex flex-1 overflow-hidden">
@@ -836,9 +651,12 @@ export default function App() {
               <ul className="space-y-1">
                 <li
                   id="nav-logs"
-                  onClick={() => setSelectedTable('logs')}
+                  onClick={() => {
+                    setSelectedTable('logs');
+                    setActiveTab('records');
+                  }}
                   className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
-                    selectedTable === 'logs'
+                    selectedTable === 'logs' && activeTab !== 'summary'
                       ? 'bg-gray-100 text-black font-medium'
                       : 'text-gray-500 hover:bg-gray-50'
                   }`}
@@ -854,7 +672,10 @@ export default function App() {
 
                 <li
                   id="nav-starter-logs"
-                  onClick={() => setSelectedTable('starter_logs')}
+                  onClick={() => {
+                    setSelectedTable('starter_logs');
+                    if (activeTab === 'summary') setActiveTab('records');
+                  }}
                   className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
                     selectedTable === 'starter_logs'
                       ? 'bg-amber-50 text-amber-900 font-medium border border-amber-200/60'
@@ -872,7 +693,10 @@ export default function App() {
 
                 <li
                   id="nav-tag-log-assn"
-                  onClick={() => setSelectedTable('tag_log_assn')}
+                  onClick={() => {
+                    setSelectedTable('tag_log_assn');
+                    if (activeTab === 'summary') setActiveTab('records');
+                  }}
                   className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
                     selectedTable === 'tag_log_assn'
                       ? 'bg-gray-100 text-black font-medium'
@@ -890,7 +714,10 @@ export default function App() {
 
                 <li
                   id="nav-category-type"
-                  onClick={() => setSelectedTable('category_type')}
+                  onClick={() => {
+                    setSelectedTable('category_type');
+                    if (activeTab === 'summary') setActiveTab('records');
+                  }}
                   className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
                     selectedTable === 'category_type'
                       ? 'bg-gray-100 text-black font-medium'
@@ -908,7 +735,10 @@ export default function App() {
 
                 <li
                   id="nav-tag-type"
-                  onClick={() => setSelectedTable('tag_type')}
+                  onClick={() => {
+                    setSelectedTable('tag_type');
+                    if (activeTab === 'summary') setActiveTab('records');
+                  }}
                   className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
                     selectedTable === 'tag_type'
                       ? 'bg-gray-100 text-black font-medium'
@@ -925,26 +755,11 @@ export default function App() {
                 </li>
 
                 <li
-                  id="nav-log-type"
-                  onClick={() => setSelectedTable('log_type')}
-                  className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
-                    selectedTable === 'log_type'
-                      ? 'bg-gray-100 text-black font-medium'
-                      : 'text-gray-500 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-3.5 h-3.5 text-gray-400" />
-                    <span>log_type</span>
-                  </div>
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 bg-white rounded border border-gray-200 text-gray-500">
-                    {selectedTable === 'log_type' ? records.length : logCount}
-                  </span>
-                </li>
-
-                <li
                   id="nav-users"
-                  onClick={() => setSelectedTable('users')}
+                  onClick={() => {
+                    setSelectedTable('users');
+                    if (activeTab === 'summary') setActiveTab('records');
+                  }}
                   className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
                     selectedTable === 'users'
                       ? 'bg-emerald-50 text-emerald-900 font-medium border border-emerald-200/60'
@@ -957,6 +772,36 @@ export default function App() {
                   </div>
                   <span className="text-[10px] font-mono text-emerald-700 bg-white px-1.5 py-0.2 rounded border border-emerald-200">
                     auth
+                  </span>
+                </li>
+              </ul>
+            </div>
+
+            <div>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Reports &amp; Analysis</h3>
+              <ul className="space-y-1">
+                <li
+                  id="nav-logs-summary"
+                  onClick={() => {
+                    setSelectedTable('logs');
+                    setActiveTab('summary');
+                  }}
+                  className={`px-3 py-2 text-sm rounded cursor-pointer transition-colors flex items-center justify-between ${
+                    (selectedTable === 'logs' && activeTab === 'summary') || selectedTable === 'summary'
+                      ? 'bg-indigo-600 text-white font-medium shadow-xs'
+                      : 'text-gray-700 hover:bg-indigo-50/70 hover:text-indigo-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <TableProperties className={`w-3.5 h-3.5 ${(selectedTable === 'logs' && activeTab === 'summary') || selectedTable === 'summary' ? 'text-white' : 'text-indigo-600'}`} />
+                    <span>Logs Summary</span>
+                  </div>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded border ${
+                    (selectedTable === 'logs' && activeTab === 'summary') || selectedTable === 'summary'
+                      ? 'bg-indigo-700 border-indigo-500 text-white'
+                      : 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  }`}>
+                    pivot
                   </span>
                 </li>
               </ul>
@@ -990,7 +835,7 @@ export default function App() {
 
         {/* Main Section */}
         <section className="flex-1 p-6 lg:p-10 bg-gray-50/30 overflow-y-auto">
-          <div className="max-w-4xl mx-auto space-y-8">
+          <div className={`${isSummary || activeTab === 'summary' ? 'max-w-6xl' : 'max-w-4xl'} mx-auto space-y-8`}>
             {/* Banner Notifications */}
             {bannerNotice && (
               <div
@@ -1022,40 +867,67 @@ export default function App() {
             {/* Page Header with Minimalist Typography */}
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-gray-100 pb-4">
               <div>
-                <h1 className="text-3xl font-light text-gray-900 tracking-tight">{selectedTable}</h1>
+                <h1 className="text-3xl font-light text-gray-900 tracking-tight">
+                  {selectedTable === 'summary' || activeTab === 'summary' ? 'logs summary & pivot' : selectedTable}
+                </h1>
                 <p className="text-sm text-gray-500 mt-1">
-                  {selectedTable === 'tag_log_assn'
+                  {selectedTable === 'summary' || activeTab === 'summary'
+                    ? 'Cross-tabulation pivot matrix breakdown of summed log amounts categorized by category and tag type, with multi-year and reconciliation filtering.'
+                    : selectedTable === 'tag_log_assn'
                     ? 'Association join table establishing a many-to-many relationship between tag_type and logs records.'
                     : selectedTable === 'starter_logs'
                     ? 'Starter / template log entries with defaults (log_date = CURRENT_DATE, reconciled = False), ready to be customized and applied directly to active logs.'
                     : selectedTable === 'logs'
-                    ? 'Primary logs tracking table recording dates, descriptions, amounts, and foreign key references to log_type, category_type, and users.'
+                    ? 'Primary logs tracking table recording dates, descriptions, amounts (positive = income, negative = expense), and foreign key references to category_type and users.'
                     : selectedTable === 'category_type'
                     ? 'A lookup table for general categories with unique auto-increment ID and unique text name.'
                     : selectedTable === 'tag_type'
                     ? 'A lookup table for categorization tags with unique auto-increment ID and unique text name.'
-                    : selectedTable === 'log_type'
-                    ? 'A lookup table for categorizing system log entries with unique auto-increment ID and unique text name.'
                     : 'User accounts synchronized with Google Authentication credentials and isolated Cloud SQL records.'}
                 </p>
               </div>
               <div className="flex gap-6 text-xs font-medium uppercase tracking-widest text-gray-400">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('records')}
+                  onClick={() => {
+                    if (selectedTable === 'summary') setSelectedTable('logs');
+                    setActiveTab('records');
+                  }}
                   className={`pb-1 transition-all ${
-                    activeTab === 'records'
+                    activeTab === 'records' && selectedTable !== 'summary'
                       ? 'border-b-2 border-black text-black font-semibold'
                       : 'hover:text-gray-600'
                   }`}
                 >
                   Data Preview ({totalRowCount})
                 </button>
+
+                {(isLogs || isSummary) && (
+                  <button
+                    id="tab-summary-pivot"
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('summary');
+                    }}
+                    className={`pb-1 transition-all flex items-center gap-1.5 ${
+                      activeTab === 'summary' || selectedTable === 'summary'
+                        ? 'border-b-2 border-indigo-600 text-indigo-700 font-semibold'
+                        : 'hover:text-gray-600'
+                    }`}
+                  >
+                    <TableProperties className="w-3.5 h-3.5" />
+                    <span>Summary &amp; Pivot</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => setActiveTab('definition')}
+                  onClick={() => {
+                    if (selectedTable === 'summary') setSelectedTable('logs');
+                    setActiveTab('definition');
+                  }}
                   className={`pb-1 transition-all ${
-                    activeTab === 'definition'
+                    activeTab === 'definition' && selectedTable !== 'summary'
                       ? 'border-b-2 border-black text-black font-semibold'
                       : 'hover:text-gray-600'
                   }`}
@@ -1064,9 +936,12 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('sql')}
+                  onClick={() => {
+                    if (selectedTable === 'summary') setSelectedTable('logs');
+                    setActiveTab('sql');
+                  }}
                   className={`pb-1 transition-all ${
-                    activeTab === 'sql'
+                    activeTab === 'sql' && selectedTable !== 'summary'
                       ? 'border-b-2 border-black text-black font-semibold'
                       : 'hover:text-gray-600'
                   }`}
@@ -1076,7 +951,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Search Filter for Records */}
+            {/* Search Filter for Records (hidden in summary tab) */}
             {activeTab === 'records' && !isUsers && (
               <div className="flex items-center justify-between gap-4">
                 <div className="relative w-full max-w-xs">
@@ -1090,7 +965,7 @@ export default function App() {
                       isStarterLogs
                         ? 'Filter starter logs...'
                         : isLogs
-                        ? 'Filter logs by description, date, type...'
+                        ? 'Filter logs by description, date, category...'
                         : isAssn
                         ? 'Filter by tag name, log description...'
                         : 'Filter by name or ID...'
@@ -1115,6 +990,19 @@ export default function App() {
             )}
 
             {/* Tab Views */}
+            {(isSummary || activeTab === 'summary') && (
+              <LogsSummaryPage
+                logs={logsList}
+                isLoading={isLoading}
+                onRefresh={fetchRecords}
+                onOpenAddLog={() => setIsLogModalOpen(true)}
+                onNavigateToLogsTable={() => {
+                  setSelectedTable('logs');
+                  setActiveTab('records');
+                }}
+              />
+            )}
+
             {activeTab === 'records' && isUsers && (
               <UsersTable isLoading={isLoading} />
             )}
@@ -1126,6 +1014,7 @@ export default function App() {
                 onDelete={handleDeleteRecord}
                 onUpdate={handleUpdateStarterLog}
                 onOpenAdd={() => setIsStarterLogModalOpen(true)}
+                onOpenImportCsv={() => setIsCsvModalOpen(true)}
                 onRefresh={fetchRecords}
                 onNotice={showNotice}
               />
@@ -1149,14 +1038,17 @@ export default function App() {
                 onUpdate={handleUpdateLog}
                 searchTerm={searchTerm}
                 onOpenAdd={() => setIsLogModalOpen(true)}
+                onOpenImportCsv={() => setIsCsvModalOpen(true)}
+                onOpenSummary={() => setActiveTab('summary')}
                 onRefresh={fetchRecords}
                 onNotice={showNotice}
               />
             )}
 
             {activeTab === 'records' && !isLogs && !isStarterLogs && !isAssn && !isUsers && (
-              <LogTypeTable
-                logTypes={records}
+              <LookupTable
+                items={records}
+                tableName={selectedTable}
                 isLoading={isLoading}
                 onUpdate={handleUpdateRecord}
                 onDelete={handleDeleteRecord}
@@ -1193,7 +1085,6 @@ export default function App() {
                     &nbsp;&nbsp;<div className="inline text-green-400">"id"</div> <div className="inline text-yellow-400 uppercase">serial PRIMARY KEY NOT NULL</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_date"</div> <div className="inline text-yellow-400 uppercase">date DEFAULT CURRENT_DATE NOT NULL</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_description"</div> <div className="inline text-yellow-400 uppercase">text</div>,<br />
-                    &nbsp;&nbsp;<div className="inline text-green-400">"log_type_id"</div> <div className="inline text-yellow-400 uppercase">integer REFERENCES "log_type"("id")</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_amount"</div> <div className="inline text-yellow-400 uppercase">numeric(12, 2)</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_category"</div> <div className="inline text-yellow-400 uppercase">integer REFERENCES "category_type"("id")</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"reconciled"</div> <div className="inline text-yellow-400 uppercase">boolean DEFAULT false</div>,<br />
@@ -1215,7 +1106,6 @@ export default function App() {
                     &nbsp;&nbsp;<div className="inline text-green-400">"id"</div> <div className="inline text-yellow-400 uppercase">serial PRIMARY KEY NOT NULL</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_date"</div> <div className="inline text-yellow-400 uppercase">date NOT NULL</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_description"</div> <div className="inline text-yellow-400 uppercase">text</div>,<br />
-                    &nbsp;&nbsp;<div className="inline text-green-400">"log_type_id"</div> <div className="inline text-yellow-400 uppercase">integer REFERENCES "log_type"("id")</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_amount"</div> <div className="inline text-yellow-400 uppercase">numeric(12, 2)</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_category"</div> <div className="inline text-yellow-400 uppercase">integer REFERENCES "category_type"("id")</div>,<br />
                     &nbsp;&nbsp;<div className="inline text-green-400">"log_user_id"</div> <div className="inline text-yellow-400 uppercase">integer REFERENCES "users"("id")</div>,<br />
@@ -1250,7 +1140,7 @@ export default function App() {
       </footer>
 
       {/* Add Modal for Lookup Tables */}
-      <AddLogTypeModal
+      <AddLookupModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onAdd={handleAddRecord}
@@ -1278,11 +1168,30 @@ export default function App() {
         onAdd={handleAddAssn}
       />
 
-      {/* Offline Outbox & Synchronization Management Drawer */}
-      <OfflineSyncDrawer
-        isOpen={isOfflineDrawerOpen}
-        onClose={() => setIsOfflineDrawerOpen(false)}
-        onRefreshData={fetchRecords}
+      {/* CSV Import Modal */}
+      <CsvImportModal
+        isOpen={isCsvModalOpen}
+        onClose={() => setIsCsvModalOpen(false)}
+        defaultTable={selectedTable === 'starter_logs' ? 'starter_logs' : 'logs'}
+        onImportComplete={(count, table) => {
+          fetchRecords();
+          if (table === 'logs') {
+            setLogsCount((prev) => prev + count);
+          } else if (table === 'starter_logs') {
+            setStarterLogsCount((prev) => prev + count);
+          }
+        }}
+        onNotice={showNotice}
+      />
+
+      {/* Database Backups & Snapshots Modal */}
+      <DatabaseBackupsModal
+        isOpen={isBackupsModalOpen}
+        onClose={() => setIsBackupsModalOpen(false)}
+        onNotice={showNotice}
+        onRestoreCompleted={() => {
+          fetchRecords();
+        }}
       />
     </div>
   );
